@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Meet o2o</title>
+  <style>
+    html, body {
+      height: 100%;
+    }
+
+    body {
+      font-family: system-ui, Arial;
+      margin: 0;
+      background: black;
+      color: white;
+      display: flex;
+    }
+
+    a,
+    a:visited {
+      color: white;
+    }
+
+    a:hover {
+      text-decoration: none;
+    }
+
+    .create {
+      display: none;
+      margin: auto;
+      justify-content: center;
+      flex-direction: column;
+    }
+
+    .create h1,
+    .create h2 {
+      color: white;
+    }
+
+    .create.show {
+      display: flex;
+    }
+
+    .create select {
+      font-size: 24px;
+    }
+
+    .create .btn {
+      font-size: 28px;
+      background-color: mediumorchid;
+    }
+
+    .create .btn:hover {
+      background-color: orchid;
+    }
+
+    .join {
+      display: none;
+      margin: auto;
+    }
+
+    .join.show {
+      display: flex;
+    }
+
+    .join .btn {
+      font-size: 32px;
+      background-color: green;
+    }
+
+    .join .btn:hover {
+      background-color: forestgreen;
+    }
+
+    .chat {
+      display: none;
+    }
+
+    .chat.show {
+      display: flex;
+    }
+
+    .remote-screen {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: black;
+    }
+
+    .share-screen {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      margin: 28px;
+      background-color: black;
+      border: 1px solid #fff3;
+      border-radius: 8px;
+      display: flex;
+    }
+
+    .share-screen video {
+      border-radius: 8px;
+      width: 250px;
+      min-height: 140px;
+    }
+
+    .share-screen .controls {
+      position: absolute;
+      display: flex;
+      width: 100%;
+      justify-content: center;
+      align-items: center;
+      height: 100%;
+    }
+
+    select,
+    button {
+      font-family: system-ui, Arial;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      color: white;
+      background-color: #fff2;
+      cursor: pointer;
+    }
+
+    select option {
+      color: black;
+    }
+
+    button.hide {
+      display: none;
+    }
+
+    button:hover {
+      background-color: #fff3;
+    }
+
+    .top {
+      position: fixed;
+      right: 15px;
+      top: 16px;
+    }
+
+    .top .leave-btn {
+      display: none;
+    }
+
+    .top .leave-btn.show {
+      display: block;
+    }
+
+    .stats {
+      display: flex;
+      font-size: 10px;
+      font-family: monospace;
+      margin: 0 12px;
+      color: white;
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 20px;
+    }
+
+    .stats .outbound {
+      flex-grow: 1;
+      justify-content: right;
+      display: none;
+    }
+
+    .stats .inbound {
+      display: none;
+    }
+
+    .stats .outbound.show,
+    .stats .inbound.show {
+      display: flex;
+    }
+
+    .stats .outbound .vals span,
+    .stats .inbound .vals span {
+      padding: 2px 4px;
+      border-radius: 3px;
+      background-color: #fff3;
+      backdrop-filter: blur(1px);
+    }
+
+    .stats .outbound .vals span {
+      margin-right: 6px;
+    }
+
+    .stats .inbound .vals span {
+      margin-left: 6px;
+    }
+
+    .good,
+    .notify {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #ff4444;
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      display: none;
+      z-index: 100;
+    }
+
+    .good {
+      background: forestgreen;
+    }
+
+    .good.show,
+    .notify.show {
+      display: block;
+    }
+
+    .git {
+      position: absolute;
+      bottom: 16px;
+      left: 0;
+      right: 0;
+      text-align: center;
+    }
+
+    .git a {
+      color: grey;
+    }
+
+    .waiting-peer {
+      display: none;
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+    }
+
+    .waiting-peer.show {
+      display: flex;
+    }
+
+    .waiting-peer .loading {
+      animation: loading-icon-anim 600ms cubic-bezier(.68, -0.55, .27, 1.55) infinite;
+      border-radius: 50%;
+      border-color: #fff transparent;
+      border-style: solid;
+      border-width: 2px;
+      width: 28px;
+      height: 28px;
+      margin: 16px;
+    }
+
+    @keyframes loading-icon-anim {
+      to {
+        transform: rotate(1turn)
+      }
+    }
+  </style>
+  <script>
+    const core = document.createElement('script');
+    core.defer = true;
+    core.src = 'core.js?' + (new Date().getTime() / 1000).toFixed();
+    document.head.appendChild(core);
+  </script>
+</head>
+<body>
+<div class="notify"></div>
+<div class="create">
+  <div style="margin: 30px auto; text-align: center">
+    <h1 style="font-size: 50px; margin: 0">Meet o2o</h1>
+    <h3 style="color: grey">Screen sharing via WebRTC (P2P)</h3>
+  </div>
+  <div style="margin: auto;">
+    <div style="display: flex">
+      <select style="margin-right: 18px" id="select-resolution" autocomplete="off">
+        <option value="640×480">SD 480p</option>
+        <option value="1280x720">HD 720p</option>
+        <option selected value="1920x1080">FHD 1080p</option>
+        <option value="2560x1440">QHD 2k</option>
+        <option value="3840x2160">UHD 4k</option>
+      </select>
+      <select style="margin-right: 18px" id="select-fps" autocomplete="off">
+        <option value="5">5 FPS</option>
+        <option value="15">15 FPS</option>
+        <option selected value="30">30 FPS</option>
+        <option value="60">60 FPS</option>
+        <option value="120">120 FPS</option>
+      </select>
+      <select id="select-codec" autocomplete="off">
+        <option selected value="H264">H264</option>
+        <option value="VP9">VP9</option>
+        <option value="AV1">AV1</option>
+      </select>
+    </div>
+    <div class="rec-bandwidth" style="color: grey; text-align: center; margin: 16px auto">
+      Recommended bandwidth: <span>3 Mb/s</span>
+    </div>
+    <div style="margin: 46px auto; text-align: center">
+      <button class="btn">Create room</button>
+    </div>
+  </div>
+  <div class="git">
+    <a target="_blank" href="https://github.com/oxmix/meet-o2o">github.com/oxmix/meet-o2o</a>
+  </div>
+</div>
+<div class="join">
+  <button class="btn">Join room</button>
+</div>
+<div class="chat">
+  <video autoplay playsinline class="remote-screen"></video>
+  <div class="waiting-peer"><span class="loading"></span>Waiting peer...</div>
+  <div class="top">
+    <button class="leave-btn">Leave</button>
+  </div>
+  <div class="share-screen">
+    <video autoplay muted playsinline></video>
+    <div class="controls">
+      <button class="share-btn">Share screen</button>
+      <button class="share-stop-btn hide">Stop share</button>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="inbound">
+      <div>INBOUND</div>
+      <div class="vals"></div>
+    </div>
+    <div class="outbound">
+      <div class="vals"></div>
+      <div>OUTBOUND</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+docker build -t meet-o2o-local .
+docker rm -f meet-o2o
+docker run -d --name meet-o2o \
+  --restart always --log-opt max-size=128k \
+  -p 18080:8080/tcp -p 13478:3478/udp \
+  -v ./web:/web meet-o2o-local
+docker logs -f meet-o2o
