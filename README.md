@@ -1,6 +1,6 @@
 # Meet o2o
 
-Screen sharing via Peer‑to‑peer WebRTC without `TURN`
+Screen sharing via Peer‑to‑peer WebRTC with microphone and camera
 
 Demo https://meet.oxmix.net
 
@@ -14,7 +14,11 @@ git clone https://github.com/oxmix/meet-o2o.git \
 
 Open http://localhost:8080
 
-![Preview](o2o.png)
+![Preview Main](o2o.png)
+
+Room
+
+![Preview Room](o2o-room.png)
 
 ### For self-hosted via Nginx with proxy_pass
 

@@ -81,6 +81,28 @@
       display: flex;
     }
 
+    .remote-mini {
+      visibility: hidden;
+      cursor: pointer;
+      position: fixed;
+      left: 0;
+      bottom: 0;
+      background-color: black;
+      border: 1px solid #fff3;
+      margin: 28px 28px 100px;
+      border-radius: 8px;
+      width: 250px;
+      min-height: 140px;
+    }
+
+    .remote-mini.show {
+      visibility: visible;
+    }
+
+    .remote-section.full .remote-mini {
+      margin-bottom: 28px;
+    }
+
     .remote-screen {
       position: fixed;
       left: 0;
@@ -92,24 +114,21 @@
       background-color: black;
     }
 
-    .share-screen {
+    .share {
       position: fixed;
       right: 0;
       bottom: 0;
-      margin: 28px;
-      background-color: black;
-      border: 1px solid #fff3;
-      border-radius: 8px;
       display: flex;
+      flex-direction: column;
     }
 
-    .share-screen video {
+    .share video {
       border-radius: 8px;
       width: 250px;
       min-height: 140px;
     }
 
-    .share-screen .controls {
+    .share .controls {
       position: absolute;
       display: flex;
       width: 100%;
@@ -118,14 +137,72 @@
       height: 100%;
     }
 
+    .share-cam-btn {
+      display: none;
+      position: fixed;
+      bottom: 208px;
+      right: 0;
+      border-radius: 8px 0 0 8px;
+      padding-right: 16px;
+    }
+
+    .share-cam-btn.show {
+      display: flex;
+    }
+
+    .share-cam {
+      display: none;
+      margin: 0 28px;
+      background-color: #fff1;
+      border-radius: 8px;
+      width: 250px;
+      position: fixed;
+      right: 0;
+      bottom: 100px;
+    }
+
+    .share-cam.show {
+      display: flex;
+    }
+
+    .share-screen-btn {
+      display: none;
+      position: fixed;
+      bottom: 275px;
+      right: 0;
+      border-radius: 8px 0 0 8px;
+      padding-right: 16px;
+    }
+
+    .share-screen-btn.show {
+      display: flex;
+    }
+
+    .share-screen {
+      display: none;
+      margin: 0 28px;
+      background-color: #fff1;
+      border-radius: 8px;
+      width: 250px;
+      position: fixed;
+      bottom: 275px;
+      right: 0;
+    }
+
+    .share-screen.show {
+      display: flex;
+    }
+
     select,
     button {
       font-family: system-ui, Arial;
+      font-size: 1rem;
       padding: 8px 12px;
       border-radius: 6px;
       border: none;
       color: white;
       background-color: #fff2;
+      backdrop-filter: blur(3px);
       cursor: pointer;
     }
 
@@ -137,50 +214,168 @@
       display: none;
     }
 
-    button:hover {
+    button:not(:disabled):hover {
       background-color: #fff3;
     }
 
-    .top {
+    .top-warn {
+      display: none;
+      border-radius: 0 0 8px 8px;
+      padding: 12px 16px 8px 16px;
+      color: white;
+      background-color: #f309;
+      backdrop-filter: blur(3px);
       position: fixed;
-      right: 15px;
-      top: 16px;
+      left: 150px;
+      top: 0;
     }
 
-    .top .leave-btn {
+    .top-warn.show {
+      display: flex;
+    }
+
+    .top-left {
+      position: fixed;
+      left: 0;
+      top: 0;
+      display: flex;
+      align-items: start;
+      flex-direction: column;
+    }
+
+    .top-left .fingerprint,
+    .top-left .timer {
+      display: flex;
+      margin: 28px 0;
+      border-radius: 0 8px 8px 0;
+      padding: 8px 12px 8px 16px;
+      color: white;
+      background-color: #fff2;
+      backdrop-filter: blur(3px);
+    }
+
+    .top-left .fingerprint {
+      display: flex;
+      font-size: 20px;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin: 28px 0 0;
+      height: 35px;
+      align-items: center;
+      letter-spacing: 10px;
+      padding-right: 8px;
+    }
+
+    .top-left .fingerprint.hide {
+      visibility: hidden;
+    }
+
+    .top-left .timer {
+      display: flex;
+      margin: 28px 0;
+      width: 66px;
+    }
+
+    .top-right {
+      position: fixed;
+      right: 0;
+      top: 0;
+      display: flex;
+      align-items: end;
+      flex-direction: column;
+    }
+
+    .top-right .leave-btn {
+      display: flex;
+      align-items: center;
+      margin: 28px 0;
+      border-radius: 8px 0 0 8px;
+      padding-right: 16px;
+    }
+
+    .top-right .mic-btn {
+      border-radius: 8px 0 0 8px;
+    }
+
+    .top-right .mic-btn button {
+      display: flex;
+      border-radius: 8px 0 0 8px;
+      padding-right: 16px;
+    }
+
+    .top-right .mic-btn svg {
+      margin-right: 6px;
+    }
+
+    .top-right .mic-btn button:last-child,
+    .top-right .mic-btn.mute button:first-child {
       display: none;
     }
 
-    .top .leave-btn.show {
-      display: block;
+    .top-right .mic-btn.mute button:last-child {
+      display: flex;
+      background-color: #f555;
     }
 
     .stats {
       display: flex;
+      min-height: 18px;
       font-size: 10px;
       font-family: monospace;
-      margin: 0 12px;
-      color: white;
+      margin: 8px 12px;
+      color: silver;
       position: absolute;
       bottom: 0;
       left: 0;
       right: 0;
-      height: 20px;
     }
 
-    .stats .outbound {
-      flex-grow: 1;
-      justify-content: right;
+    .stats .link {
+      align-content: end;
+    }
+
+    .stats .link button {
+      margin-bottom: -8px;
+      border-radius: 8px 8px 0 0;
+      padding-bottom: 12px;
+    }
+
+    .stats.hide .link button:first-child,
+    .stats .link button:last-child {
       display: none;
     }
 
+    .stats.hide .link button:last-child {
+      display: block;
+    }
+
+    .stats .outbound,
     .stats .inbound {
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+      flex-basis: 50%;
+      justify-content: end;
+    }
+
+    .stats .outbound > div,
+    .stats .inbound > div {
+      display: none;
+      margin-bottom: 6px;
+    }
+
+    .stats .outbound > div.show,
+    .stats .inbound > div.show {
+      display: flex;
+    }
+
+    .stats.hide .outbound > div.show,
+    .stats.hide .inbound > div.show {
       display: none;
     }
 
-    .stats .outbound.show,
-    .stats .inbound.show {
-      display: flex;
+    .stats .outbound > div {
+      justify-content: right;
     }
 
     .stats .outbound .vals span,
@@ -188,7 +383,7 @@
       padding: 2px 4px;
       border-radius: 3px;
       background-color: #fff3;
-      backdrop-filter: blur(1px);
+      backdrop-filter: blur(3px);
     }
 
     .stats .outbound .vals span {
@@ -284,7 +479,7 @@
   <div style="margin: auto;">
     <div style="display: flex">
       <select style="margin-right: 18px" id="select-resolution" autocomplete="off">
-        <option value="640×480">SD 480p</option>
+        <option value="640x480">SD 480p</option>
         <option value="1280x720">HD 720p</option>
         <option selected value="1920x1080">FHD 1080p</option>
         <option value="2560x1440">QHD 2k</option>
@@ -298,13 +493,14 @@
         <option value="120">120 FPS</option>
       </select>
       <select id="select-codec" autocomplete="off">
-        <option selected value="H264">H264</option>
-        <option value="VP9">VP9</option>
+        <option value="VP8">VP8</option>
+        <option value="H264">H264</option>
+        <option selected value="VP9">VP9</option>
         <option value="AV1">AV1</option>
       </select>
     </div>
     <div class="rec-bandwidth" style="color: grey; text-align: center; margin: 16px auto">
-      Recommended bandwidth: <span>3 Mb/s</span>
+      Recommended bandwidth: <span>4 Mb/s</span>
     </div>
     <div style="margin: 46px auto; text-align: center">
       <button class="btn">Create room</button>
@@ -318,26 +514,114 @@
   <button class="btn">Join room</button>
 </div>
 <div class="chat">
-  <video autoplay playsinline class="remote-screen"></video>
-  <div class="waiting-peer"><span class="loading"></span>Waiting peer...</div>
-  <div class="top">
-    <button class="leave-btn">Leave</button>
+  <div class="remote-section">
+    <video autoplay playsinline disablepictureinpicture="true" class="remote-screen"></video>
+    <video autoplay playsinline disablepictureinpicture="true" class="remote-mini"></video>
   </div>
-  <div class="share-screen">
-    <video autoplay muted playsinline></video>
-    <div class="controls">
-      <button class="share-btn">Share screen</button>
-      <button class="share-stop-btn hide">Stop share</button>
+  <div class="waiting-peer"><span class="loading"></span>Waiting for the peer viewer</div>
+  <div class="top-warn">
+    Peer’s micro is muted
+  </div>
+  <div class="top-left">
+    <div class="fingerprint hide" title="Fingerprint as Emojis"></div>
+    <div class="timer">00:00:00</div>
+  </div>
+  <div class="top-right">
+    <button class="leave-btn">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 512 512" style="margin-right: 8px">
+        <path fill="currentColor"
+              d="M288 0c0-17.7-14.3-32-32-32s-32 14.3-32 32v256c0 17.7 14.3 32 32 32s32-14.3 32-32zM146.3 98.4c14.5-10.1 18-30.1 7.9-44.6s-30.1-18-44.6-7.9C43.4 92.1 0 169 0 256c0 141.4 114.6 256 256 256s256-114.6 256-256c0-87-43.4-163.9-109.7-210.1c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6c49.8 34.8 82.3 92.4 82.3 157.6c0 106-86 192-192 192S64 362 64 256c0-65.2 32.5-122.9 82.3-157.6" />
+      </svg>
+      Exit
+    </button>
+    <div class="mic-btn">
+      <button>
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+          <path fill="currentColor"
+                d="M12 16c2.206 0 4-1.794 4-4V6c0-2.217-1.785-4.021-3.979-4.021a1 1 0 0 0-.209.025A4.006 4.006 0 0 0 8 6v6c0 2.206 1.794 4 4 4" />
+          <path fill="currentColor"
+                d="M11 19.931V22h2v-2.069c3.939-.495 7-3.858 7-7.931h-2c0 3.309-2.691 6-6 6s-6-2.691-6-6H4c0 4.072 3.061 7.436 7 7.931" />
+        </svg>
+        Mute
+      </button>
+      <button>
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+          <path fill="currentColor"
+                d="m21.707 20.293l-3.4-3.4A7.93 7.93 0 0 0 20 12h-2a5.95 5.95 0 0 1-1.119 3.467l-1.449-1.45A3.9 3.9 0 0 0 16 12V6c0-2.217-1.785-4.021-3.979-4.021q-.105 0-.209.025A4.006 4.006 0 0 0 8 6v.586L3.707 2.293L2.293 3.707l18 18zM6 12H4c0 4.072 3.06 7.436 7 7.931V22h2v-2.069a8 8 0 0 0 2.241-.63l-1.549-1.548A6 6 0 0 1 12 18c-3.309 0-6-2.691-6-6" />
+          <path fill="currentColor" d="M8.007 12.067a3.996 3.996 0 0 0 3.926 3.926z" />
+        </svg>
+        Unmute
+      </button>
+    </div>
+  </div>
+  <div class="share">
+    <button class="share-cam-btn show">
+      <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" style="margin-right: 6px">
+        <path fill="currentColor"
+              d="M12 12q-.825 0-1.412-.587T10 10t.588-1.412T12 8t1.413.588T14 10t-.587 1.413T12 12M6.5 9q.425 0 .713-.288T7.5 8t-.288-.712T6.5 7t-.712.288T5.5 8t.288.713T6.5 9M4 21v-2h3.225l.525-2.1q-2.475-.425-4.112-2.363T2 10q0-2.925 2.038-4.962T9 3h6q2.925 0 4.963 2.038T22 10q0 2.6-1.638 4.538T16.25 16.9l.525 2.1H20v2zm8-7q1.65 0 2.825-1.175T16 10t-1.175-2.825T12 6T9.175 7.175T8 10t1.175 2.825T12 14" />
+      </svg>
+      Share Camera
+    </button>
+    <div class="share-cam">
+      <video autoplay muted playsinline disablepictureinpicture="true"></video>
+      <div class="controls">
+        <button class="share-stop-btn">Stop share</button>
+      </div>
+    </div>
+    <button class="share-screen-btn show">
+      <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" style="margin-right: 6px">
+        <path fill="currentColor"
+              d="M20 9V6h-3V4h3q.825 0 1.413.588T22 6v3zM2 9V6q0-.825.588-1.412T4 4h3v2H4v3zm15 11v-2h3v-3h2v3q0 .825-.587 1.413T20 20zM4 20q-.825 0-1.412-.587T2 18v-3h2v3h3v2zm2-4V8h12v8z" />
+      </svg>
+      Share Screen
+    </button>
+    <div class="share-screen">
+      <video autoplay muted playsinline disablepictureinpicture="true"></video>
+      <div class="controls">
+        <button class="share-stop-btn">Stop share</button>
+      </div>
     </div>
   </div>
   <div class="stats">
     <div class="inbound">
-      <div>INBOUND</div>
-      <div class="vals"></div>
+      <div class="in-mic">
+        <div>INBOUND MICROPHONE</div>
+        <div class="vals"></div>
+      </div>
+      <div class="in-cam">
+        <div>INBOUND CAMERA</div>
+        <div class="vals"></div>
+      </div>
+      <div class="in-screen">
+        <div>INBOUND SCREEN</div>
+        <div class="vals"></div>
+      </div>
+      <div class="in-screen-a">
+        <div>INBOUND SCREEN AUDIO</div>
+        <div class="vals"></div>
+      </div>
+    </div>
+    <div class="link">
+      <button title="Hide stats">↓</button>
+      <button title="Show stats">↑</button>
     </div>
     <div class="outbound">
-      <div class="vals"></div>
-      <div>OUTBOUND</div>
+      <div class="out-mic">
+        <div class="vals"></div>
+        <div>OUTBOUND MICROPHONE</div>
+      </div>
+      <div class="out-cam">
+        <div class="vals"></div>
+        <div>OUTBOUND CAMERA</div>
+      </div>
+      <div class="out-screen">
+        <div class="vals"></div>
+        <div>OUTBOUND SCREEN</div>
+      </div>
+      <div class="out-screen-a">
+        <div class="vals"></div>
+        <div>OUTBOUND SCREEN AUDIO</div>
+      </div>
     </div>
   </div>
 </div>

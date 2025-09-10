@@ -12,33 +12,60 @@ const createBtn = createEl.querySelector('.btn');
 const joinEl = document.querySelector('.join');
 const joinBtn = joinEl.querySelector('.btn');
 const chatEl = document.querySelector('.chat');
-const leaveBtn = document.querySelector('.top .leave-btn');
-const shareScreen = document.querySelector('.share-screen');
-const shareBtn = shareScreen.querySelector('.controls .share-btn');
-const shareStopBtn = shareScreen.querySelector('.controls .share-stop-btn');
-const localVideo = shareScreen.querySelector('video');
-const remoteVideo = document.querySelector('.remote-screen');
-const outboundEl = document.querySelector('.stats .outbound .vals');
-const inboundEl = document.querySelector('.stats .inbound .vals');
+const timer = document.querySelector('.top-left .timer')
+const fpEl = document.querySelector('.top-left .fingerprint')
+const leaveBtn = document.querySelector('.top-right .leave-btn')
+const micBtnEl = document.querySelector('.top-right .mic-btn')
+const micBtnLinks = micBtnEl.querySelectorAll('button')
+const shareBlock = document.querySelector('.share')
+const shareCam = shareBlock.querySelector('.share-cam')
+const shareCamBtn = shareBlock.querySelector('.share-cam-btn')
+const shareCamStopBtn = shareCam.querySelector('.controls .share-stop-btn')
+const shareScreen = shareBlock.querySelector('.share-screen')
+const shareScreenBtn = shareBlock.querySelector('.share-screen-btn')
+const shareScreenStopBtn = shareScreen.querySelector('.controls .share-stop-btn')
+const localCamVideo = shareCam.querySelector('video')
+const localScreenVideo = shareScreen.querySelector('video')
+const remoteSection = document.querySelector('.remote-section')
+const remoteMiniVideo = remoteSection.querySelector('.remote-mini')
+const remoteScreenVideo = remoteSection.querySelector('.remote-screen')
+const statsEl = document.querySelector('.stats')
+const statsLinks = statsEl.querySelectorAll('.link button')
+const outboundMicEl = statsEl.querySelector('.out-mic .vals')
+const inboundMicEl = statsEl.querySelector('.in-mic .vals')
+const outboundCamEl = statsEl.querySelector('.out-cam .vals')
+const inboundCamEl = statsEl.querySelector('.in-cam .vals')
+const outboundScrEl = statsEl.querySelector('.out-screen .vals')
+const inboundScrEl = statsEl.querySelector('.in-screen .vals')
+const outboundScrAEl = statsEl.querySelector('.out-screen-a .vals')
+const inboundScrAEl = statsEl.querySelector('.in-screen-a .vals')
 const notifyMsg = document.querySelector('.notify');
 const waitingPeer = document.querySelector('.waiting-peer');
-
-const remoteAudio = document.createElement('audio');
-remoteAudio.autoplay = true;
-remoteAudio.playsInline = true;
-remoteAudio.hidden = true;
-chatEl.appendChild(remoteAudio);
+const topWarn = document.querySelector('.top-warn')
 
 /* state */
 let ws;
 let pc = null;
-let videoTransceiver = null;
-let localStream = new MediaStream();
+let micSender = null;
+let micTransceiver = null;
+let camTransceiver = null;
+let screenTransceiver = null;
+let screenAudioTransceiver = null;
 let micStream = null;
 let screenStream = null;
+let camStream = null;
+let trackCamVideo = new MediaStream();
+let trackScreenVideo = new MediaStream();
 let room = null;
 let isJoined = false;
 let wsMessageQueue = [];
+const state = {
+  type: 'state',
+  micMute: false,
+  cam: false,
+  screen: false,
+}
+let stopEffectScreen = false
 
 /* perfect negotiation flags */
 let makingOffer = false;
@@ -47,14 +74,31 @@ let ignoreOffer = false;
 
 /* stats */
 let statsTimer;
-let prevOutbound = {};
-let prevInbound = {};
+let prevStats = {};
 
-let roomWidth = 1920;
-let roomHeight = 1080;
-let roomFps = 30;
-let roomBitrate = 3110400;
-let roomCodec = 'H264'
+/* quality */
+let roomWidth = 1920
+let roomHeight = 1080
+let roomFps = 30
+let roomBitrate = roomWidth * roomHeight * roomFps * .065
+let roomCodec = 'VP9'
+
+let elapsedSeconds = 0
+const remoteAudio = new Audio()
+remoteAudio.addEventListener('playing', () => {
+  if (elapsedSeconds) {
+    return
+  }
+  setInterval(() => {
+    elapsedSeconds++;
+    const h = Math.floor(elapsedSeconds / 3600).toString().padStart(2, '0')
+    const m = Math.floor((elapsedSeconds % 3600) / 60).toString().padStart(2, '0')
+    const s = Math.floor(elapsedSeconds % 60).toString().padStart(2, '0')
+    timer.textContent = `${h}:${m}:${s}`
+  }, 1000);
+})
+remoteAudio.autoplay = true
+remoteAudio.playsInline = true
 
 function calcBitrate() {
   roomBitrate = roomWidth * roomHeight * roomFps * .065
@@ -77,19 +121,71 @@ document.querySelector('#select-codec').addEventListener('change', (e) => {
   calcBitrate()
 });
 
-remoteVideo.addEventListener('dblclick', function () {
+const unload = (e) => {
+  if (!polite) {
+    e.preventDefault()
+  }
+}
+window.addEventListener('beforeunload', unload)
+
+leaveBtn.addEventListener('click', () => {
+  if (!confirm('Are you sure you want to leave?')) {
+    return
+  }
+  window.removeEventListener('beforeunload', unload)
+  sendSignal({type: 'leave'})
+  cleanup()
+  history.replaceState(null, null, '/')
+  location.href = '/'
+})
+
+micBtnLinks.forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!micStream) {
+      return
+    }
+    micBtnEl.classList.toggle('mute')
+    state.micMute = micBtnEl.classList.contains('mute')
+    sendSignal(state)
+    micStream.getAudioTracks().forEach(track => track.enabled = !state.micMute)
+  })
+})
+
+remoteScreenVideo.addEventListener('dblclick', function () {
   if (!document.fullscreenElement) {
-    remoteVideo.requestFullscreen().catch(err => {
-      console.error('Error attempting to enable fullscreen:', err);
+    remoteSection.classList.add('full')
+    remoteSection.requestFullscreen().catch(err => {
+      console.error('Error attempting to enable fullscreen:', err)
     });
   } else {
-    document.exitFullscreen();
+    remoteSection.classList.remove('full')
+    document.exitFullscreen()
   }
+})
+
+statsLinks.forEach(link => {
+  link.addEventListener('click', () => statsEl.classList.toggle('hide'))
+})
+
+document.querySelectorAll('video').forEach(video => {
+  video.addEventListener('contextmenu', e => e.preventDefault())
+})
+
+remoteMiniVideo.addEventListener('click', function () {
+  const miniCam = remoteMiniVideo.srcObject?.getTracks()
+    .some(t => t === camTransceiver?.sender.track)
+  ;[remoteScreenVideo.srcObject, remoteMiniVideo.srcObject] =
+    miniCam
+      ? [remoteScreenVideo.srcObject, remoteMiniVideo.srcObject]
+      : [remoteMiniVideo.srcObject, remoteScreenVideo.srcObject]
 });
 
 window.addEventListener('pagehide', () => {
-  if (!polite && room.length > 0) {
-    navigator.sendBeacon('/leave', JSON.stringify({room}));
+  if (room.length > 0) {
+    navigator.sendBeacon('/leave', JSON.stringify({
+      room,
+      type: !polite ? 'creator' : 'viewer'
+    }));
   }
 });
 
@@ -106,13 +202,14 @@ window.onload = async () => {
 
   if (localStorage.getItem('room-created') === room) {
     localStorage.removeItem('room-created')
+    room = ''
     history.replaceState(null, null, '/');
     location.href = '/'
     return
   }
   localStorage.removeItem('room-created')
 
-  if (room.length === 16) {
+  if (room.length > 0 && window.location.search.length <= 0) {
     joinEl.classList.add('show')
   } else {
     createEl.classList.add('show')
@@ -120,8 +217,8 @@ window.onload = async () => {
 }
 
 createBtn.onclick = async () => {
-  polite = false // создатель комнаты — инициатор (impolite)
-  room = generateCode()
+  polite = false // создатель — инициатор (impolite)
+  room = generateName() + generateName()
   localStorage.setItem('room-created', room)
   history.replaceState(null, '', `/${room}`)
   createEl.classList.remove('show')
@@ -138,55 +235,72 @@ joinBtn.onclick = async () => {
 }
 
 async function connect() {
-  leaveBtn.classList.add('show')
+  await createPeerConnection()
   await initMic()
   connectSignaling()
-  createPeerConnection();
 }
 
-leaveBtn.onclick = () => {
-  sendSignal({type: 'leave'})
-  cleanup()
-  history.replaceState(null, null, '/');
-  location.href = '/'
+function log(...p) {
+  console.log(...p)
 }
 
-function generateCode(length = 16) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  const array = new Uint8Array(length)
-  window.crypto.getRandomValues(array)
-  let code = '';
-  for (let i = 0; i < length; i++) {
-    code += chars[array[i] % chars.length]
+function generateName() {
+  const syllables = [
+    'a', 'i', 'u', 'e', 'o',
+    'ka', 'ki', 'ku', 'ke', 'ko',
+    'sa', 'shi', 'su', 'se', 'so',
+    'ta', 'chi', 'tsu', 'te', 'to',
+    'na', 'ni', 'nu', 'ne', 'no',
+    'ha', 'hi', 'fu', 'he', 'ho',
+    'ma', 'mi', 'mu', 'me', 'mo',
+    'ya', 'yu', 'yo',
+    'ra', 'ri', 'ru', 're', 'ro',
+    'wa', 'wo', 'n'
+  ];
+  const syllableCount = Math.floor(Math.random() * 2) + 2;
+  let word = '';
+  for (let i = 0; i < syllableCount; i++) {
+    word += syllables[Math.floor(Math.random() * syllables.length)];
   }
-  return code
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 async function initMic() {
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
-      // audio: true
     });
-    micStream.getTracks().forEach(track => {
-      localStream.addTrack(track);
-      // если pc уже есть — добавляем в pc
-      if (pc) {
-        addTrackToPc(track);
-      }
-    });
-    localVideo.srcObject = localStream;
-    micEffect();
-    console.log('initMic done, localStream tracks:', localStream.getTracks());
-  } catch (e) {
-    console.warn("mic capture failed", e);
-    showNotify("Microphone access is required for this app. Please allow microphone access.");
+
+    if (micStream) {
+      const sender = micSender || micTransceiver.sender
+      await sender.replaceTrack(micStream.getAudioTracks()[0]);
+      await improveAudio(sender)
+    }
+
+    soundEffect(micStream, micBtnEl)
+    soundEffect(micStream, shareCam)
+    log('Mic capture ok, tracks:', micStream.getTracks());
+  } catch (err) {
+    console.warn('Mic capture failed:', err);
+    showNotify('Microphone access is required for this app. Please allow microphone access');
   }
 }
 
-function micEffect() {
+async function improveAudio(transceiver) {
+  if (transceiver) {
+    const params = transceiver.getParameters()
+    if (!params.encodings) params.encodings = [{}]
+    params.encodings[0].maxBitrate = 128000
+    log('improveAudio ok, params:', params, 'transceiver:', transceiver)
+    await transceiver.setParameters(params)
+  } else {
+    console.warn('improveAudio failed: not found transceiver')
+  }
+}
+
+function soundEffect(stream, to) {
   const audioCtx = new AudioContext();
-  const source = audioCtx.createMediaStreamSource(micStream);
+  const source = audioCtx.createMediaStreamSource(stream);
   const analyser = audioCtx.createAnalyser();
   analyser.fftSize = 512;
 
@@ -194,6 +308,10 @@ function micEffect() {
   source.connect(analyser);
 
   function update() {
+    if (stopEffectScreen) {
+      to.style.boxShadow = 'none'
+      return
+    }
     analyser.getByteTimeDomainData(dataArray);
 
     let sum = 0;
@@ -207,16 +325,80 @@ function micEffect() {
     if (intensity < 2) {
       intensity = 0
     }
-    shareScreen.style.boxShadow = `0 0 ${intensity}px rgba(255, 255, 255, .5)`;
+    to.style.boxShadow = `0 0 ${intensity}px rgba(255, 255, 255, .5)`;
 
-    requestAnimationFrame(update);
+    requestAnimationFrame(update)
   }
 
-  update();
+  update()
 }
 
-shareStopBtn.onclick = stopScreenShare;
-shareBtn.onclick = async () => {
+shareCamStopBtn.onclick = stopCamShare;
+shareCamBtn.onclick = async () => {
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: {ideal: 1280},
+        height: {ideal: 720},
+        frameRate: {ideal: 30}
+      },
+    });
+
+    const camVideoTrack = camStream.getVideoTracks()[0];
+    const camAudioTrack = camStream.getAudioTracks()[0];
+    camVideoTrack._kind = 'camera'
+    log('Got cam tracks:',
+      'video:', !!camVideoTrack, 'audio:', !!camAudioTrack, 'video id:', camVideoTrack?.id);
+
+    camVideoTrack.addEventListener('ended', stopCamShare);
+
+    // for polite: find 1 mid - cam
+    if (!camTransceiver) {
+      camTransceiver = pc.getTransceivers().find(t => t.mid === '1')
+      camTransceiver.direction = 'sendrecv'
+    }
+    await camTransceiver.sender.replaceTrack(camVideoTrack);
+
+    localCamVideo.srcObject = new MediaStream([camVideoTrack]);
+
+    shareCamBtn.classList.remove('show')
+    shareCam.classList.add('show')
+
+    // Принудительный оффер после добавления трека**, чтобы polite peer (viewer) передал экран
+    await forceRenegotiation()
+
+    state.cam = true
+    sendSignal(state)
+  } catch (err) {
+    console.error('Failed to capture cam', err);
+    showNotify('Failed to capture cam: ' + err.message);
+    shareCamBtn.classList.add('show')
+    shareCam.classList.remove('show')
+  }
+}
+
+function stopCamShare() {
+  if (!camStream) {
+    shareCamBtn.classList.add('show')
+    shareCam.classList.remove('show')
+    return;
+  }
+
+  camTransceiver.sender.replaceTrack(null)
+  camStream.getTracks().forEach(track => {
+    track.stop()
+  })
+  camStream = null;
+  localCamVideo.srcObject = null;
+
+  shareCamBtn.classList.add('show')
+  shareCam.classList.remove('show')
+  state.cam = false
+  sendSignal(state)
+}
+
+shareScreenStopBtn.onclick = stopScreenShare;
+shareScreenBtn.onclick = async () => {
   try {
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
@@ -224,148 +406,156 @@ shareBtn.onclick = async () => {
         height: {ideal: roomHeight},
         frameRate: {ideal: roomFps}
       },
-      audio: true
+      audio: {
+        echoCancellation: false, // убрать подавление эха
+        noiseSuppression: false, // убрать шумодав
+        autoGainControl: false, // убрать автоподстройку громкости
+        channelCount: 2,
+        sampleRate: 48000,
+        sampleSize: 16
+      }
     });
 
     const screenVideoTrack = screenStream.getVideoTracks()[0];
-    const screenAudioTrack = screenStream.getAudioTracks()[0];
+    screenVideoTrack._kind = 'screen'
+    let screenAudioTrack = screenStream.getAudioTracks()[0];
 
-    console.log('Got screen tracks:', !!screenVideoTrack, !!screenAudioTrack, screenVideoTrack?.id);
+    log('Got screen tracks:',
+      'video:', !!screenVideoTrack, 'audio:', !!screenAudioTrack, 'video id:', screenVideoTrack?.id);
+
+    if (!!screenAudioTrack) {
+      stopEffectScreen = false
+      soundEffect(new MediaStream([screenAudioTrack]), shareScreen);
+    }
 
     screenVideoTrack.addEventListener('ended', stopScreenShare);
 
-    console.log('get contentHint', screenVideoTrack.contentHint);
+    log('screenVideoTrack get contentHint', screenVideoTrack.contentHint)
     screenVideoTrack.contentHint = 'motion'; // 'none' | 'motion' | 'detail' | 'text'
-    console.log('after set contentHint', screenVideoTrack.contentHint);
+    log('screenVideoTrack set contentHint', screenVideoTrack.contentHint)
 
-    let vidSender = (videoTransceiver && videoTransceiver.sender)
-      || pc.getSenders().find(s => s.track && s.track.kind === 'video');
-
-    if (vidSender) {
-      if (typeof vidSender.replaceTrack === 'function') {
-        await vidSender.replaceTrack(screenVideoTrack);
-      }
-    } else {
-      vidSender = pc.addTrack(screenVideoTrack, screenStream);
+    let vidSender = screenTransceiver?.sender
+    // polite find 2 mid - screen video
+    if (!vidSender) {
+      screenTransceiver = pc.getTransceivers().find(t => t.mid === '2')
+      screenTransceiver.direction = 'sendrecv'
+      prefersVidCodec(screenTransceiver)
+      vidSender = screenTransceiver.sender
     }
+    await vidSender.replaceTrack(screenVideoTrack)
 
     // set fps, bitrate
     if (vidSender) {
-      const params = vidSender.getParameters();
-      console.log("Get vidSender params:", params);
-      if (!params.encodings) params.encodings = [{}];
-
-      console.log('set maxBitrate:', roomBitrate, 'and maxFramerate:', roomFps)
-      params.encodings[0].maxBitrate = roomBitrate;
-      params.encodings[0].maxFramerate = roomFps;
-      // limiter (1 = native), set 2 => (2K -> ~720p)
-      params.encodings[0].scaleResolutionDownBy = 1;
-      console.log('setParameters video track:', params);
-      await vidSender.setParameters(params);
-    }
-
-    // Аналогично для аудио (если есть)
-    if (screenAudioTrack) {
-      let audSender = pc.getSenders().find(s =>
-        s.track?.kind === 'audio' && s.track.id !== micStream?.getAudioTracks()[0]?.id);
-      if (!audSender) {
-        pc.addTrack(screenAudioTrack, screenStream);
-        console.log('Added new audio sender for screen audio');
-      } else if (typeof audSender.replaceTrack === 'function') {
-        await audSender.replaceTrack(screenAudioTrack);
-        console.log('Replaced existing audio sender track with screen audio');
-      }
-    }
-
-    localVideo.srcObject = new MediaStream([
-      ...(micStream ? micStream.getAudioTracks() : []),
-      screenVideoTrack,
-      ...(screenAudioTrack ? [screenAudioTrack] : [])
-    ]);
-
-    shareBtn.classList.add('hide');
-    shareStopBtn.classList.remove('hide');
-
-    // **Принудительный оффер после добавления трека**, чтобы polite peer передал экран
-    if (pc) {
       try {
-        makingOffer = true;
-        const offer = await pc.createOffer();
-        offer.sdp = preferCodec(offer.sdp);
-        await pc.setLocalDescription(offer);
-        sendSignal({type: 'offer', offer: pc.localDescription});
-        console.log('Forced offer sent after screen track added');
-      } catch (e) {
-        console.error('Failed to create offer after screen share', e);
-      } finally {
-        makingOffer = false;
+        const params = vidSender.getParameters();
+        if (!params.encodings.length) {
+          params.encodings = [{}];
+        }
+        log('Set for screen maxBitrate:', roomBitrate, 'and maxFramerate:', roomFps)
+        params.encodings[0].maxBitrate = roomBitrate;
+        params.encodings[0].maxFramerate = roomFps;
+        // limiter (1 = native), set 2 => (2K -> ~720p)
+        params.encodings[0].scaleResolutionDownBy = 1;
+        log('Get screen vidSender params:', params);
+        await vidSender.setParameters(params);
+      } catch (err) {
+        log('Set screen vidSender params, err:', err);
       }
     }
 
+    let audSender = screenAudioTransceiver?.sender
+    // polite find 3 mid - screen audio
+    if (!audSender) {
+      screenAudioTransceiver = pc.getTransceivers().find(t => t.mid === '3')
+      screenAudioTransceiver.direction = 'sendrecv'
+      audSender = screenAudioTransceiver.sender
+    }
+    await audSender.replaceTrack(screenAudioTrack)
+
+    log('Replaced existing audio sender track with screen audio');
+
+    if (audSender) {
+      try {
+        const params = audSender.getParameters();
+        if (!params.encodings) params.encodings = [{}];
+        params.encodings[0].maxBitrate = 128000;
+        log('Get screen audSender params:', params);
+        await audSender.setParameters(params);
+      } catch (err) {
+        log('Set screen audSender params, err:', err);
+      }
+    }
+
+    localScreenVideo.srcObject = new MediaStream([screenVideoTrack]);
+
+    shareScreenBtn.classList.remove('show')
+    shareScreen.classList.add('show')
+
+    // Принудительный оффер после замена трека, чтобы polite peer (viewer) передал экран
+    await forceRenegotiation()
+
+    state.screen = true
+    sendSignal(state)
   } catch (err) {
     console.error('Failed to capture screen', err);
     showNotify('Failed to capture screen: ' + err.message);
-    shareBtn.classList.remove('hide');
-    shareStopBtn.classList.add('hide');
+    shareScreenBtn.classList.add('show')
+    shareScreen.classList.remove('show')
   }
 }
 
 function stopScreenShare() {
-  if (!screenStream) return;
-
-  const videoTrack = screenStream.getVideoTracks()[0];
-  const audioTrack = screenStream.getAudioTracks()[0];
-
-  // Try to restore previous video track: find sender for video and replace with original camera track if exists
-  if (pc) {
-    const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-    const camTrack = micStream ? micStream.getVideoTracks && micStream.getVideoTracks()[0] : null;
-    if (videoSender && typeof videoSender.replaceTrack === 'function') {
-      try {
-        // if you have a camera video track, use it; otherwise replace with null to stop
-        videoSender.replaceTrack(camTrack || null);
-        console.log('Replaced screen sender with camera/null');
-      } catch (e) {
-        console.warn('replaceTrack on stopScreenShare failed', e);
-      }
-    } else if (videoTrack) {
-      // if there was an addTrack earlier, try to remove the sender by finding sender with same id
-      const sender = pc.getSenders().find(s => s.track && s.track.id === videoTrack.id);
-      if (sender) {
-        try {
-          if (typeof sender.replaceTrack === 'function') sender.replaceTrack(null);
-          else pc.removeTrack(sender);
-        } catch (e) {
-          console.warn('removeTrack failed', e);
-        }
-      }
-    }
-
+  if (!screenStream) {
+    shareScreenBtn.classList.add('show')
+    shareScreen.classList.remove('show')
+    stopEffectScreen = true
+    return;
   }
 
-  // stop and clean local preview
-  screenStream.getTracks().forEach(t => {
-    try {
-      t.stop();
-    } catch (e) {
-    }
-  });
+  screenTransceiver.sender.replaceTrack(null)
+  screenStream.getTracks().forEach(track => {
+    track.stop()
+  })
   screenStream = null;
+  localScreenVideo.srcObject = null;
 
-  localVideo.srcObject = new MediaStream(micStream.getTracks());
+  shareScreenBtn.classList.add('show')
+  shareScreen.classList.remove('show')
+  stopEffectScreen = true
+  state.screen = false
+  sendSignal(state)
+}
 
-  shareBtn.classList.remove("hide");
-  shareStopBtn.classList.add("hide");
+const fpEmojis = [
+  '🍎', '🍊', '🍋', '🍉', '🍇', '🍓', '🍒', '🥝',
+  '🥑', '🍍', '🥥', '🍌', '🥕', '🌽', '🥔', '🍆',
+  '🐶', '🐱', '🐭', '🐰', '🦊', '🐻', '🐼', '🐨',
+  '🦁', '🐯', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧'
+]
+
+function showFingerprint(sdp) {
+  let fingerprint = sdp.match(/a=fingerprint:sha-256\s*([0-9A-Fa-f:]+)/i)
+  if (!fingerprint || !fingerprint[1]) {
+    console.error('err fingerprint:', fingerprint)
+    return
+  }
+  const hex = fingerprint[1].replace(/:/g, '')
+  const buf = new Uint8Array(hex.match(/.{2}/g).map(b => parseInt(b, 16)))
+  fpEl.textContent = ''
+  for (let i = 0; i < 3; i++) {
+    fpEl.textContent += fpEmojis[buf[i] % fpEmojis.length]
+  }
+  fpEl.classList.remove('hide')
 }
 
 function connectSignaling() {
   try {
-    console.log('connectSignaling -> SIGNALING_URL =', SIGNALING_URL);
+    log('connectSignaling -> SIGNALING_URL =', SIGNALING_URL);
     ws = new WebSocket(SIGNALING_URL);
 
     ws.onopen = () => {
-      console.log('WebSocket connected, state=', ws.readyState);
-      // отправляем join (через sendSignal — теперь она умеет буферизовать/посылать)
+      log('WebSocket connected, state=', ws.readyState);
+
       sendSignal({
         type: 'join', room, quality: !polite ? {
           width: roomWidth,
@@ -375,24 +565,11 @@ function connectSignaling() {
           codec: roomCodec,
         } : null
       });
-
-      // если оффер уже создан локально (например, negotiationneeded сработал ДО открытия WS),
-      // убедимся что он уйдёт
-      if (pc && pc.localDescription && pc.localDescription.type === 'offer') {
-        console.log('WS now open — flushing local offer');
-        sendSignal({type: 'offer', offer: pc.localDescription});
-      }
-
-      // флаш очереди (вдобавок)
-      flushQueue();
-
-      shareBtn.classList.remove('hide');
-      shareStopBtn.classList.add('hide');
     };
 
     ws.onmessage = async (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "ready") {
+      if (msg.type === 'ready') {
         roomWidth = msg.quality.width
         roomHeight = msg.quality.height
         roomFps = msg.quality.fps
@@ -403,86 +580,151 @@ function connectSignaling() {
           const offer = await pc.createOffer();
           offer.sdp = preferCodec(offer.sdp);
           await pc.setLocalDescription(offer);
-          sendSignal({type: "offer", room, offer});
+          showFingerprint(pc.localDescription && pc.localDescription.sdp)
+          sendSignal({type: 'offer', room, offer});
         }
       }
 
       if (msg.type === 'error') {
-        showNotify(msg.message || 'Server error');
-        if (msg.fatal) {
-          cleanup();
-          setTimeout(() => {
-            history.replaceState(null, null, '/');
-            location.href = '/'
-          }, 1000)
+        if (msg.text) {
+          msg.text = 'Error: ' + msg.text
         }
+        showNotify(msg.text || 'Server error')
+        cleanup();
+        setTimeout(() => {
+          history.replaceState(null, null, '/');
+          location.href = '/'
+        }, 3000)
+        return
+      }
+
+      if (msg.type === 'peer-replaced') {
+        log('Peer replaced (server), performing full restart as if first connect');
+        fullRestartAsIfFirstConnect().catch(e => {
+          console.error('fullRestartAsIfFirstConnect failed', e);
+          // fallback: если что-то пошло не так — пересоздадим PC стандартно
+          recreatePeerConnectionAndRenegotiate();
+        });
         return;
       }
 
       if (msg.type === 'joined') {
-        console.log('joined received; polite=', polite);
+        log('joined received; polite=', polite);
         isJoined = true;
-        if (!pc) createPeerConnection();
+        return
+      }
 
-        // если вы — создатель (impolite) и оффер ещё не создан/не отправлен, форсируем
-        // (помогает, если negotiationneeded пропустился)
-        try {
-          if (!polite && pc && pc.signalingState === 'stable' && !makingOffer) {
-            console.log('Forcing initial offer (creator/impolite)');
-            makingOffer = true;
-            const offer = await pc.createOffer();
-            offer.sdp = preferCodec(offer.sdp);
-            await pc.setLocalDescription(offer);
-            sendSignal({type: 'offer', offer: pc.localDescription});
-          }
-        } catch (e) {
-          console.error('force offer failed', e);
-        } finally {
-          makingOffer = false;
+      if (msg.type === 'state') {
+        log('State received:', msg)
+        if (msg.cam && !msg.screen) {
+          remoteMiniVideo.classList.remove('show')
+          remoteMiniVideo.srcObject = null
+          remoteScreenVideo.classList.add('show')
+          remoteScreenVideo.srcObject = trackCamVideo
         }
-      } else if (msg.type === 'offer') {
+        if (msg.cam && msg.screen) {
+          remoteMiniVideo.classList.add('show')
+          remoteMiniVideo.srcObject = trackCamVideo
+          remoteScreenVideo.classList.add('show')
+          remoteScreenVideo.srcObject = trackScreenVideo
+        }
+        if (!msg.cam && msg.screen) {
+          remoteMiniVideo.classList.remove('show')
+          remoteMiniVideo.srcObject = null
+          remoteScreenVideo.classList.add('show')
+          remoteScreenVideo.srcObject = trackScreenVideo
+        }
+        if (!msg.cam && !msg.screen) {
+          remoteMiniVideo.classList.remove('show')
+          remoteMiniVideo.srcObject = null
+          remoteScreenVideo.classList.remove('show')
+          remoteScreenVideo.srcObject = null
+        }
+        if (msg.micMute) {
+          topWarn.classList.add('show')
+        } else {
+          topWarn.classList.remove('show')
+        }
+      }
+
+      if (msg.type === 'offer') {
         try {
-          if (!pc) createPeerConnection();
+          if (!pc) await createPeerConnection();
+
+          // might from pc.remoteDescription.sdp after await pc.setRemoteDescription(msg.offer)
+          showFingerprint(msg.offer && msg.offer.sdp)
 
           const offerCollision = makingOffer || pc.signalingState !== 'stable';
           ignoreOffer = !polite && offerCollision;
           if (ignoreOffer) {
-            console.log('Ignoring incoming offer due to collision (impolite).');
+            log('Ignoring incoming offer due to collision (impolite).');
             return;
           }
 
           if (offerCollision) {
             try {
               await pc.setLocalDescription({type: 'rollback'});
-              console.log('Performed local rollback before applying remote offer');
+              log('Performed local rollback before applying remote offer');
             } catch (rbErr) {
               console.warn('Rollback failed or not needed:', rbErr);
             }
           }
 
           await pc.setRemoteDescription(msg.offer);
-          const answer = await pc.createAnswer();
-          answer.sdp = preferCodec(answer.sdp);
-          await pc.setLocalDescription(answer);
-          sendSignal({type: 'answer', answer: pc.localDescription});
+
+          // Простая версия: сразу создаём answer если состояние это позволяет
+          if (pc.signalingState === 'have-remote-offer') {
+            const answer = await pc.createAnswer();
+            answer.sdp = preferCodec(answer.sdp);
+            await pc.setLocalDescription(answer);
+            sendSignal({type: 'answer', answer: pc.localDescription});
+          }
         } catch (e) {
           console.error('Error handling incoming offer', e);
           showNotify('Error handling offer: ' + e.message);
         }
-      } else if (msg.type === 'answer') {
+        return;
+      }
+
+      if (msg.type === 'answer') {
         try {
           await pc.setRemoteDescription(msg.answer);
         } catch (e) {
           console.warn('setRemoteDescription(answer) failed', e);
-          showNotify('Error setting remote description: ' + e.message);
+          const text = (e && e.message) ? e.message.toLowerCase() : '';
+          if (text.includes('ice') || text.includes('restart')) {
+            log('Detected ICE mismatch — recreating PeerConnection');
+            // проще: пересоздаём и инициируем пересогласование
+            if (!polite) {
+              await recreatePeerConnectionAndRenegotiate();
+            }
+          } else {
+            showNotify('Error setting remote description: ' + e.message);
+          }
         }
-      } else if (msg.type === 'candidate') {
+        return;
+      }
+
+      if (msg.type === 'candidate') {
         try {
-          await pc.addIceCandidate(msg.candidate);
+          if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
+            // отбрасываем кандидата
+            console.warn('Dropping remote candidate: no remoteDescription yet', msg.candidate);
+          } else {
+            try {
+              await pc.addIceCandidate(msg.candidate);
+            } catch (err) {
+              console.warn('addIceCandidate failed', err);
+            }
+          }
         } catch (e) {
-          console.warn('addIceCandidate failed', e);
+          console.warn('candidate handling failed', e);
         }
-      } else if (msg.type === 'leave' || msg.type === 'hangup') {
+        return;
+      }
+
+      if (msg.type === 'leave' || msg.type === 'hangup') {
+        window.removeEventListener('beforeunload', unload)
         cleanupPeer();
         history.replaceState(null, null, '/?peer=close');
         location.href = '/?peer=close';
@@ -490,11 +732,17 @@ function connectSignaling() {
     };
 
     ws.onclose = (ev) => {
-      console.log('WebSocket closed', ev && ev.code, ev && ev.reason);
+      log('WebSocket closed', ev && ev.code, ev && ev.reason);
       if (isJoined) {
         showNotify('Connection lost. Trying to reconnect...');
         setTimeout(connectSignaling, 2000);
       }
+
+      cleanupPeer();
+
+      setTimeout(() => {
+        connectSignaling();
+      }, 2000);
     };
 
     ws.onerror = (e) => {
@@ -507,13 +755,43 @@ function connectSignaling() {
   }
 }
 
+async function fullRestartAsIfFirstConnect() {
+  log('fullRestartAsIfFirstConnect: start');
+
+  // close old pc
+  cleanupPeer();
+  flushQueue();
+
+  // crate new pc
+  await createPeerConnection();
+
+  if (polite) {
+    log('Viewer (polite): waiting for new offer after restart');
+    return;
+  }
+
+  // create offer
+  try {
+    makingOffer = true;
+    const offer = await pc.createOffer();
+    offer.sdp = preferCodec(offer.sdp);
+    await pc.setLocalDescription(offer);
+    sendSignal({type: 'offer', offer: pc.localDescription});
+    log('Creator: new offer sent after restart');
+  } catch (err) {
+    console.error('Creator fullRestart: failed to create/send offer', err);
+  } finally {
+    makingOffer = false;
+  }
+}
+
 function flushQueue() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   while (wsMessageQueue.length) {
     const m = wsMessageQueue.shift();
     try {
       ws.send(JSON.stringify(m));
-      console.log('Flushed queued message', m.type);
+      log('Flushed queued message', m.type);
     } catch (e) {
       console.error('Failed to flush queued message', e, m);
       wsMessageQueue.unshift(m);
@@ -531,44 +809,62 @@ function sendSignal(obj) {
       return;
     }
     ws.send(JSON.stringify(obj));
-    console.log('Signal sent', obj.type);
+    log('Signal sent', obj.type);
   } catch (e) {
     console.error('sendSignal failed, queueing', e, obj);
     wsMessageQueue.push(obj);
   }
 }
 
-function createPeerConnection() {
+async function createPeerConnection() {
   try {
     pc = new RTCPeerConnection({iceServers: STUN_SERVERS});
 
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        sendSignal({type: 'candidate', candidate: e.candidate});
-      }
+    // ICE
+    pc.onicecandidate = e => {
+      if (e.candidate) sendSignal({type: 'candidate', candidate: e.candidate});
     };
 
+    // Tracks received from remote peer
     pc.ontrack = (e) => {
-      console.log('New track received', e.track.kind, 'id=', e.track.id,
-        'readyState=', e.track.readyState, 'streams=', e.streams);
+      log('New track received:', e.track.kind, 'mid:', e.transceiver.mid, 'data:', e)
       try {
         if (e.track.kind === 'audio') {
-          if (!remoteAudio.srcObject) remoteAudio.srcObject = new MediaStream();
+          if (!remoteAudio.srcObject) remoteAudio.srcObject = new MediaStream()
           if (!remoteAudio.srcObject.getTracks().some(t => t.id === e.track.id)) {
-            remoteAudio.srcObject.addTrack(e.track);
-            console.log('Added audio track to remoteAudio, settings=', e.track.getSettings && e.track.getSettings());
+            remoteAudio.srcObject.addTrack(e.track)
+            log('Added audio track to remoteAudio:', e.track)
           }
-        } else if (e.track.kind === 'video') {
-          if (!remoteVideo.srcObject) remoteVideo.srcObject = new MediaStream();
-          if (!remoteVideo.srcObject.getTracks().some(t => t.id === e.track.id)) {
-            remoteVideo.srcObject.addTrack(e.track);
-            console.log('Added video track to remoteVideo, settings=', e.track.getSettings && e.track.getSettings());
-          }
-          // try to play
-          remoteVideo.play().catch(err => console.warn('remoteVideo.play failed:', err));
+        }
 
-          console.log('remote video track settings:', e.track.getSettings && e.track.getSettings());
-          console.log('remote video track enabled:', e.track.enabled, 'muted:', e.track.muted);
+        if (e.track.kind === 'video' && e.transceiver.mid === '1') { // 1 - cam
+          if (!remoteMiniVideo.srcObject) {
+            remoteMiniVideo.srcObject = new MediaStream()
+          }
+          if (!remoteMiniVideo.srcObject.getTracks().some(t => t.id === e.track.id)) {
+            remoteMiniVideo.srcObject.addTrack(e.track)
+            trackCamVideo.addTrack(e.track)
+            log('Added video screen track:', e.track)
+          }
+          remoteMiniVideo.addEventListener('canplay', (e) => {
+            e.target.classList.add('show');
+            e.target.play().catch(err => console.warn('remoteMiniVideo.play failed:', err));
+          })
+        }
+
+        if (e.track.kind === 'video' && e.transceiver.mid === '2') { // 2 - screen
+          if (!remoteScreenVideo.srcObject) {
+            remoteScreenVideo.srcObject = new MediaStream()
+          }
+          if (!remoteScreenVideo.srcObject.getTracks().some(t => t.id === e.track.id)) {
+            remoteScreenVideo.srcObject.addTrack(e.track)
+            trackScreenVideo.addTrack(e.track)
+            log('Added video cam track:', e.track)
+          }
+          remoteScreenVideo.addEventListener('canplay', (e) => {
+            e.target.classList.add('show');
+            e.target.play().catch(err => console.warn('remoteScreenVideo.play failed:', err));
+          })
         }
       } catch (err) {
         console.warn('ontrack handler error', err);
@@ -576,86 +872,129 @@ function createPeerConnection() {
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('Connection state:', pc.connectionState);
+      log('Connection state:', pc.connectionState);
       if (pc.connectionState === 'connected') {
         startStats();
         showNotify('Connection established!', 'good');
-        waitingPeer.style.display = 'none'
+        waitingPeer.classList.remove('show')
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        showNotify('Connection lost. Trying to reconnect...');
+        if (!polite) {
+          waitingPeer.classList.add('show')
+        }
+        showNotify('Connection lost!');
       }
     };
 
     pc.onnegotiationneeded = async () => {
-      console.log('onnegotiationneeded fired, makingOffer=', makingOffer,
-        'polite=', polite, 'signalingState=', pc.signalingState);
+      if (makingOffer) return;
       try {
-        if (makingOffer) return;
-        if (polite) {
-          // Полит корректно ждёт оффер — ничего не делаем
-          console.log('Polite peer: skip negotiationneeded, wait for offer');
-          return;
-        }
         makingOffer = true;
-        console.log('ImpOolite peer: creating offer');
         const offer = await pc.createOffer();
-        offer.sdp = preferCodec(offer.sdp);
         await pc.setLocalDescription(offer);
         sendSignal({type: 'offer', offer: pc.localDescription});
-        console.log('Offer sent by impolite peer');
       } catch (err) {
-        console.error('negotiationneeded failed', err);
+        console.error('negotiationneeded error', err);
       } finally {
         makingOffer = false;
       }
     };
 
-    // codec prefs для видео
     try {
-      videoTransceiver = pc.addTransceiver('video', {
-        direction: 'sendrecv',
-        sendEncodings: [{maxBitrate: roomBitrate}]
-      });
-      const caps = RTCRtpSender.getCapabilities('video');
-      if (caps && caps.codecs) {
-        const h264 = caps.codecs.filter(c => /h264/i.test(c.mimeType));
-        const others = caps.codecs.filter(c => !/h264/i.test(c.mimeType));
-        if (h264.length) {
-          videoTransceiver.setCodecPreferences([...h264, ...others]);
-          console.log('Codec preferences set: H264 first');
-        }
+
+      if (!polite) {
+        micTransceiver = pc.addTransceiver('audio', {
+          direction: 'sendrecv',
+          sendEncodings: [{maxBitrate: 128000}]
+        });
+        camTransceiver = pc.addTransceiver('video', {
+          direction: 'sendrecv',
+        });
+        screenTransceiver = pc.addTransceiver('video', {
+          direction: 'sendrecv',
+          sendEncodings: [{maxBitrate: roomBitrate}]
+        });
+        prefersVidCodec(screenTransceiver)
+        screenAudioTransceiver = pc.addTransceiver('audio', {
+          direction: 'sendrecv',
+          sendEncodings: [{maxBitrate: 128000}]
+        });
+      } else {
+        // add (fill recvonly -> sendrecv) track viewer => creator
+        const micStream = new MediaStream([createSilentAudioTrack()]);
+        micSender = pc.addTrack(micStream.getAudioTracks()[0], micStream);
+        const params = micSender.getParameters();
+        if (!params.encodings) params.encodings = [{}];
+        params.encodings[0].maxBitrate = 128000;
+        await micSender.setParameters(params);
       }
-    } catch (e) {
-      console.warn('addTransceiver(video) failed', e);
+
+    } catch (err) {
+      console.error('pc.addTransceiver err:', err);
     }
-
-    // добавляем текущие локальные треки (аудио из initMic, видео если будет)
-    localStream.getTracks().forEach(t => addTrackToPc(t));
-
-    shareBtn.classList.remove('hide');
-    shareStopBtn.classList.add('hide');
-  } catch (e) {
-    console.error('Failed to create peer connection', e);
-    showNotify('Failed to create peer connection: ' + e.message);
+  } catch (err) {
+    console.error('Failed to create peer connection', err);
+    showNotify('Failed to create peer connection: ' + err.message);
   }
 }
 
-function addTrackToPc(track) {
+function prefersVidCodec(transceiver) {
+  const caps = RTCRtpSender.getCapabilities('video');
+  if (caps && caps.codecs) {
+    log('Available codecs:', caps.codecs)
+    const prefer = caps.codecs.filter(c =>
+      (new RegExp(roomCodec, 'i')).test(c.mimeType));
+    const others = caps.codecs.filter(c =>
+      !(new RegExp(roomCodec, 'i')).test(c.mimeType));
+    if (prefer.length) {
+      transceiver.setCodecPreferences([...prefer, ...others]);
+      log(`Codec preferences set: ${roomCodec} first:`, prefer);
+    }
+  }
+}
+
+function createSilentAudioTrack() {
+  const ctx = new AudioContext();
+  const oscillator = ctx.createOscillator();
+  const dst = oscillator.connect(ctx.createMediaStreamDestination());
+  oscillator.start();
+  const track = dst.stream.getAudioTracks()[0];
+  track.enabled = false;
+  return track;
+}
+
+async function forceRenegotiation() {
+  if (!pc) return;
   try {
-    console.log('addTrackToPc called for', track.kind, track.id);
-    if (!pc) {
-      console.warn('no pc yet, will add later');
-      return;
+    makingOffer = true;
+    const offer = await pc.createOffer();
+    offer.sdp = preferCodec(offer.sdp);
+    await pc.setLocalDescription(offer);
+    sendSignal({type: 'offer', offer: pc.localDescription});
+    log('Forced offer sent (renegotiation)');
+  } catch (err) {
+    console.error('forceRenegotiation failed', err);
+  } finally {
+    makingOffer = false;
+  }
+}
+
+async function recreatePeerConnectionAndRenegotiate() {
+  log('Recreating PeerConnection...');
+  cleanupPeer();
+  await createPeerConnection();
+
+  if (!polite) {
+    try {
+      makingOffer = true;
+      const offer = await pc.createOffer();
+      offer.sdp = preferCodec(offer.sdp);
+      await pc.setLocalDescription(offer);
+      sendSignal({type: 'offer', offer: pc.localDescription});
+    } catch (err) {
+      console.error('Failed to create offer after recreation:', err);
+    } finally {
+      makingOffer = false;
     }
-    if (pc.getSenders().some(s => s.track && s.track.id === track.id)) {
-      console.log('track already added', track.id);
-      return;
-    }
-    pc.addTrack(track, localStream);
-    console.log('added track to pc', track.kind, track.id,
-      'senders:', pc.getSenders().map(s => s.track?.id));
-  } catch (e) {
-    console.warn('addTrackToPc failed', e);
   }
 }
 
@@ -671,8 +1010,9 @@ function cleanupPeer() {
     }
     pc = null;
   }
-  remoteVideo.srcObject = null;
-  prevOutbound = {};
+  remoteScreenVideo.srcObject = null;
+  prevStats = {};
+  makingOffer = false;
 }
 
 function cleanup() {
@@ -683,9 +1023,10 @@ function cleanup() {
   }
   ws = null;
   isJoined = false;
-  leaveBtn.classList.remove('show');
-  shareBtn.classList.remove('hide');
-  shareStopBtn.classList.add('hide');
+  shareScreenBtn.classList.add('show')
+  shareScreen.classList.remove('show')
+  shareCamBtn.classList.add('show')
+  shareCam.classList.remove('show')
 }
 
 function preferCodec(sdp) {
@@ -717,109 +1058,174 @@ function startStats() {
   statsTimer = setInterval(async () => {
     if (!pc) return;
     const stats = await pc.getStats();
-    let outbound = '';
-    let inbound = '';
-    const now = performance.now();
+    const mLines = [
+      {
+        mid: '0', // micro
+        type: 'outbound-rtp',
+        kind: 'audio',
+        entity: 'microphone',
+        data: '',
+        container: outboundMicEl
+      }, {
+        mid: '1', // cam
+        type: 'outbound-rtp',
+        kind: 'video',
+        entity: 'camera',
+        data: '',
+        container: outboundCamEl
+      }, {
+        mid: '2', // screen
+        type: 'outbound-rtp',
+        kind: 'video',
+        entity: 'screen',
+        data: '',
+        container: outboundScrEl
+      }, {
+        mid: '3', // screen audio
+        type: 'outbound-rtp',
+        kind: 'audio',
+        entity: 'screen-audio',
+        data: '',
+        container: outboundScrAEl
+      }, {
+        mid: '0', // micro
+        type: 'inbound-rtp',
+        kind: 'audio',
+        entity: 'microphone',
+        data: '',
+        container: inboundMicEl
+      }, {
+        mid: '1', // cam
+        type: 'inbound-rtp',
+        kind: 'video',
+        entity: 'camera',
+        data: '',
+        container: inboundCamEl
+      }, {
+        mid: '2', // screen
+        type: 'inbound-rtp',
+        kind: 'video',
+        entity: 'screen',
+        data: '',
+        container: inboundScrEl
+      }, {
+        mid: '3', // screen audio
+        type: 'inbound-rtp',
+        kind: 'audio',
+        entity: 'screen-audio',
+        data: '',
+        container: inboundScrAEl
+      },
+    ]
 
-    let codecs = '';
+    const now = performance.now()
+
+    let codecsAudio = []
+    let codecsVideo = []
     stats.forEach(report => {
       if (report.type === 'codec' && report.mimeType) {
-        codecs += `<span>${report.mimeType.replace('video/', '')
-          .replace('audio/', '').toUpperCase()}</span>`;
+        let codec = report.mimeType.replace('audio/', '')
+          .replace('video/', '').toUpperCase()
+        if (report.mimeType.startsWith('audio/') && !codecsAudio.includes(codec)) {
+          codecsAudio.push(codec)
+        }
+        if (report.mimeType.startsWith('video/') && !codecsVideo.includes(codec)) {
+          codecsVideo.push(codec)
+        }
       }
-    });
+    })
 
-    stats.forEach(report => {
-      if (report.type === 'outbound-rtp' && (report.kind === 'video' || report.mediaType === 'video')) {
-        if (report.bytesReceived <= 0) {
-          return
+    for (let m in mLines) {
+      let line = mLines[m]
+      stats.forEach(report => {
+        const bytes = report.bytesSent || report.bytesReceived
+        if (line.type === report.type && line.kind === report.kind && line.mid === report.mid && bytes > 0) {
+          const id = report.id || report.ssrc || 'out-v-' + report.mid;
+          const prev = prevStats[id] || {bytes: bytes || 0, timestamp: now};
+          const deltaBytes = (bytes || 0) - (prev.bytes || 0);
+          const deltaTime = (now - (prev.timestamp || now)) / 1000 || 1;
+          const kbps = Math.round((deltaBytes * 8) / 1000 / deltaTime);
+          prevStats[id] = {bytes: bytes || 0, timestamp: now};
+
+          mLines[m].data += `<span>${kbps} Kbps</span>`;
+          mLines[m].data += `<span>${line.type === 'inbound-rtp'
+            ? 'Received'
+            : 'Sent'}` + ` ${Math.round((bytes || 0) * 8 / 1000 / 1000)} MB</span>`;
+          mLines[m].data += `<span>${line.type === 'inbound-rtp'
+            ? report.packetsReceived
+            : report.packetsSent} packets</span>`;
+
+          if (line.kind === 'video') {
+            if (report?.frameWidth > 0 && report?.frameHeight > 0) {
+              mLines[m].data += `<span>${report.frameWidth}x${report.frameHeight}</span>`;
+            }
+            mLines[m].data += `<span>${Math.round(report.framesPerSecond || 0)} FPS</span>`;
+            if (codecsVideo.length > 0) {
+              mLines[m].data += codecsVideo.map(e => `<span>${e}</span>`).join('')
+            }
+          } else {
+            if (codecsAudio.length > 0) {
+              mLines[m].data += codecsAudio.map(e => `<span>${e}</span>`).join('')
+            }
+          }
         }
-        const id = report.id || report.ssrc || 'out-v';
-        const prev = prevOutbound[id] || {bytesSent: report.bytesSent || 0, timestamp: now};
-        const deltaBytes = (report.bytesSent || 0) - (prev.bytesSent || 0);
-        const deltaTime = (now - (prev.timestamp || now)) / 1000 || 1;
-        const kbps = Math.round((deltaBytes * 8) / 1000 / deltaTime);
-        prevOutbound[id] = {bytesSent: report.bytesSent || 0, timestamp: now};
-
-        const track = pc.getSenders().find(s => s.track && s.track.kind === 'video')?.track;
-        const settings = track?.getSettings ? track.getSettings() : null;
-
-        outbound += `<span>${kbps} Kbps</span>`;
-        outbound += `<span>Sent ${Math.round((report.bytesSent || 0) * 8 / 1000 / 1000)} MB</span>`;
-        outbound += `<span>${report.packetsSent} packets</span>`;
-        if (settings) {
-          outbound += `<span>${settings.width || 0}x${settings.height || 0}</span>`;
-        }
-        outbound += `<span>${Math.round(report.framesPerSecond || 0)} FPS</span>`;
-        outbound += codecs
-      }
-
-      if (report.type === 'inbound-rtp' && report.kind === 'video') {
-        if (report.bytesReceived <= 0) {
-          return
-        }
-        const id = report.id || report.ssrc || 'out-v';
-        const prev = prevInbound[id] || {bytesReceived: report.bytesReceived || 0, timestamp: now};
-        const deltaBytes = (report.bytesReceived || 0) - (prev.bytesReceived || 0);
-        const deltaTime = (now - (prev.timestamp || now)) / 1000 || 1;
-        const kbps = Math.round((deltaBytes * 8) / 1000 / deltaTime);
-        prevInbound[id] = {bytesReceived: report.bytesReceived || 0, timestamp: now};
-
-
-        const receiver = pc.getReceivers().find(s =>
-          s.track && s.track.id === report.trackIdentifier);
-        const track = receiver?.track;
-        const settings = track?.getSettings ? track.getSettings() : null;
-
-        inbound += `<span>${kbps} Kbps</span>`;
-        inbound += `<span>Received ${Math.round((report.bytesReceived || 0) * 8 / 1000 / 1000)} MB</span>`;
-        inbound += `<span>${report.packetsReceived} packets</span>`;
-        if (settings) {
-          inbound += `<span>${settings.width || 0}x${settings.height || 0}</span>`;
-        }
-        inbound += `<span>${Math.round(report.framesPerSecond || 0)} FPS</span>`;
-        inbound += codecs
-      }
-    });
-
-    outboundEl.innerHTML = outbound
-    if (outbound.length > 0) {
-      outboundEl.parentNode.classList.add('show')
+      })
     }
-    inboundEl.innerHTML = inbound
-    if (inbound.length > 0) {
-      inboundEl.parentNode.classList.add('show')
-    }
+
+    mLines.forEach(m => {
+      m.container.innerHTML = m.data
+      if (m.data.length > 0) {
+        m.container.parentNode.classList.add('show')
+      } else {
+        m.container.parentNode.classList.remove('show')
+      }
+    })
   }, 1000);
 }
 
-function testSenderVideoParams() {
+function testParams() {
   try {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
     if (sender) {
       const params = sender.getParameters()
-      console.log(`sender params: ${JSON.stringify(params, null, 2)}`)
+      log(`sender params: ${JSON.stringify(params, null, 2)}`)
     }
   } catch (err) {
     console.error(`sender params err:`, err)
   }
+
+  console.table(pc.getReceivers().map((r, i) => ({
+    i,
+    trackId: r.track?.id ?? null,
+    kind: r.track?.kind ?? null,
+    readyState: r.track?.readyState ?? null,
+    trackLabel: r.track?.label ?? null
+  })));
+
+  console.table(pc.getTransceivers().map((t, i) => ({
+    i,
+    mid: t.mid ?? null,
+    direction: t.direction,
+    senderTrack: t.sender?.track?.id ?? null,
+    receiverTrack: t.receiver?.track?.id ?? null
+  })));
 }
 
 function testStun() {
   (function (servers) {
     servers.forEach(stun => {
-      console.log('test stun:', stun.urls)
+      log('test stun:', stun.urls)
 
       const pc = new RTCPeerConnection({
         iceServers: [{urls: stun.urls}]
       })
 
-      pc.createDataChannel("test")
+      pc.createDataChannel('test')
       pc.createOffer().then(o => pc.setLocalDescription(o))
 
       pc.onicecandidate = e => {
         if (e.candidate) {
-          console.log(stun.urls, 'candidate:', e.candidate.candidate)
+          log(stun.urls, 'candidate:', e.candidate.candidate)
         }
       }
     })
