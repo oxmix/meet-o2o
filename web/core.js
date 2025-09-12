@@ -45,6 +45,9 @@ const topWarn = document.querySelector('.top-warn')
 
 /* state */
 let ws;
+let wsReconnectTimeout = null
+let wsConnecting = false
+let wsMessageQueue = []
 let pc = null;
 let micSender = null;
 let micTransceiver = null;
@@ -58,7 +61,6 @@ let trackCamVideo = new MediaStream();
 let trackScreenVideo = new MediaStream();
 let room = null;
 let isJoined = false;
-let wsMessageQueue = [];
 const state = {
   type: 'state',
   micMute: false,
@@ -66,6 +68,12 @@ const state = {
   screen: false,
 }
 let stopEffectScreen = false
+let establishedVideoMd1 = false
+let pendingRemoteCandidates = []
+let lastNegotiationAt = 0
+const negotiationDebounceMs = 800
+let lastHexSdpLocal = null
+let lastHexSdpRemote = null
 
 /* perfect negotiation flags */
 let makingOffer = false;
@@ -82,6 +90,25 @@ let roomHeight = 1080
 let roomFps = 30
 let roomBitrate = roomWidth * roomHeight * roomFps * .065
 let roomCodec = 'VP9'
+const qRes = localStorage.getItem('q-res')
+if (qRes) {
+  const qxRes = qRes.split('x')
+  if (qxRes.length > 1) {
+    roomWidth = parseInt(qxRes[0])
+    roomHeight = parseInt(qxRes[1])
+    document.querySelector('#select-resolution').value = qRes
+  }
+
+  document.querySelector('#select-fps').value = roomFps =
+    parseInt(localStorage.getItem('q-fps') || roomFps)
+
+  roomBitrate = roomWidth * roomHeight * roomFps * .065
+
+  document.querySelector('#select-codec').value = roomCodec =
+    localStorage.getItem('q-codec') || roomCodec
+
+  calcBitrate()
+}
 
 let elapsedSeconds = 0
 const remoteAudio = new Audio()
@@ -109,15 +136,18 @@ function calcBitrate() {
 }
 
 document.querySelector('#select-resolution').addEventListener('change', (e) => {
-  [roomWidth, roomHeight] = e.target.value.split('x').map(parseFloat)
+  localStorage.setItem('q-res', e.target.value)
+  ;[roomWidth, roomHeight] = e.target.value.split('x').map(parseFloat)
   calcBitrate()
 });
 document.querySelector('#select-fps').addEventListener('change', (e) => {
   roomFps = +e.target.value
+  localStorage.setItem('q-fps', roomFps)
   calcBitrate()
 });
 document.querySelector('#select-codec').addEventListener('change', (e) => {
   roomCodec = e.target.value
+  localStorage.setItem('q-codec', roomCodec)
   calcBitrate()
 });
 
@@ -189,12 +219,13 @@ window.addEventListener('pagehide', () => {
   }
 });
 
-function showNotify(message, cls) {
+function showNotify(message, cls, closeAfter) {
+  closeAfter = closeAfter || 5000
   notifyMsg.textContent = message;
   notifyMsg.classList.add('show', cls || 'error');
   setTimeout(() => {
     notifyMsg.classList.remove('show', cls || 'error');
-  }, 5000);
+  }, closeAfter);
 }
 
 window.onload = async () => {
@@ -235,6 +266,15 @@ joinBtn.onclick = async () => {
 }
 
 async function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    log('connect: signaling already connecting/open — skip duplicate connect()')
+  }
+
+  makingOffer = false
+  ignoreOffer = false
+  isJoined = false
+  establishedVideoMd1 = false
+
   await createPeerConnection()
   await initMic()
   connectSignaling()
@@ -281,8 +321,12 @@ async function initMic() {
     soundEffect(micStream, shareCam)
     log('Mic capture ok, tracks:', micStream.getTracks());
   } catch (err) {
-    console.warn('Mic capture failed:', err);
-    showNotify('Microphone access is required for this app. Please allow microphone access');
+    if (err.message.includes('The request is not allowed by the user agent or the platform')) {
+      console.warn('Mic capture failed:', err)
+      showNotify('Microphone access is required for this app. Please allow microphone access')
+    } else {
+      showNotify(err, false, 60000)
+    }
   }
 }
 
@@ -533,27 +577,85 @@ const fpEmojis = [
   '🦁', '🐯', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧'
 ]
 
-function showFingerprint(sdp) {
-  let fingerprint = sdp.match(/a=fingerprint:sha-256\s*([0-9A-Fa-f:]+)/i)
-  if (!fingerprint || !fingerprint[1]) {
-    console.error('err fingerprint:', fingerprint)
+function extractFingerprintHexFromSdp(sdp) {
+  if (!sdp) return null
+  const m = sdp.match(/a=fingerprint:sha-256\s*([0-9A-Fa-f:]+)/i)
+  if (!m || !m[1]) return null
+  return m[1].replace(/:/g, '').toLowerCase()
+}
+
+function hexToBytes(hex) {
+  if (!hex) return null
+  const pairs = hex.match(/.{1,2}/g)
+  if (!pairs) return null
+  return new Uint8Array(pairs.map(p => parseInt(p, 16)))
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function xorBytes(a, b) {
+  const len = Math.max(a.length, b.length)
+  const out = new Uint8Array(len)
+  for (let i = 0; i < len; i++) {
+    const av = a[i] || 0
+    const bv = b[i] || 0
+    out[i] = av ^ bv
+  }
+  return out
+}
+
+function emojisFromHex(hex, count = 3) {
+  const bytes = hexToBytes(hex)
+  if (!bytes) return ''
+  let s = ''
+  for (let i = 0; i < count; i++) {
+    const b = bytes[i] ?? 0
+    s += fpEmojis[b % fpEmojis.length]
+  }
+  return s
+}
+
+function showFingerprint(localHex, remoteHex) {
+  lastHexSdpLocal = localHex
+  lastHexSdpRemote = remoteHex
+
+  if (localHex && remoteHex) {
+    const L = hexToBytes(localHex)
+    const R = hexToBytes(remoteHex)
+    const comb = xorBytes(L, R)
+    const combHex = bytesToHex(comb)
+    fpEl.textContent = emojisFromHex(combHex, 3)
+    fpEl.classList.remove('hide')
     return
   }
-  const hex = fingerprint[1].replace(/:/g, '')
-  const buf = new Uint8Array(hex.match(/.{2}/g).map(b => parseInt(b, 16)))
-  fpEl.textContent = ''
-  for (let i = 0; i < 3; i++) {
-    fpEl.textContent += fpEmojis[buf[i] % fpEmojis.length]
+  if (localHex) {
+    fpEl.textContent = emojisFromHex(localHex, 3)
+    fpEl.classList.remove('hide')
+    return
   }
-  fpEl.classList.remove('hide')
+  if (remoteHex) {
+    fpEl.textContent = emojisFromHex(remoteHex, 3)
+    fpEl.classList.remove('hide')
+    return
+  }
+  fpEl.classList.add('hide')
 }
 
 function connectSignaling() {
   try {
     log('connectSignaling -> SIGNALING_URL =', SIGNALING_URL);
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      log('WS already connecting/open, skip connectSignaling')
+      return;
+    }
+    wsConnecting = true
     ws = new WebSocket(SIGNALING_URL);
 
     ws.onopen = () => {
+      wsConnecting = false
+      flushQueue()
       log('WebSocket connected, state=', ws.readyState);
 
       sendSignal({
@@ -577,11 +679,7 @@ function connectSignaling() {
         roomCodec = msg.quality.codec
         if (!polite) {
           // только impolite создаёт оффер
-          const offer = await pc.createOffer();
-          offer.sdp = preferCodec(offer.sdp);
-          await pc.setLocalDescription(offer);
-          showFingerprint(pc.localDescription && pc.localDescription.sdp)
-          sendSignal({type: 'offer', room, offer});
+          await forceRenegotiation()
         }
       }
 
@@ -599,13 +697,17 @@ function connectSignaling() {
       }
 
       if (msg.type === 'peer-replaced') {
-        log('Peer replaced (server), performing full restart as if first connect');
-        fullRestartAsIfFirstConnect().catch(e => {
-          console.error('fullRestartAsIfFirstConnect failed', e);
-          // fallback: если что-то пошло не так — пересоздадим PC стандартно
-          recreatePeerConnectionAndRenegotiate();
-        });
-        return;
+        log('Peer replaced (server) — performing soft restart (reconnect signaling)')
+        cleanupPeer()
+        await connect()
+        try {
+          await restoreLocalSenders()
+          log('restoreLocalSenders completed')
+        } catch (err) {
+          console.warn('restoreLocalSenders failed, err:', err)
+        }
+        sendSignal(state)
+        return
       }
 
       if (msg.type === 'joined') {
@@ -616,11 +718,17 @@ function connectSignaling() {
 
       if (msg.type === 'state') {
         log('State received:', msg)
+
         if (msg.cam && !msg.screen) {
-          remoteMiniVideo.classList.remove('show')
-          remoteMiniVideo.srcObject = null
-          remoteScreenVideo.classList.add('show')
-          remoteScreenVideo.srcObject = trackCamVideo
+          // might track video md1 received after state signal
+          const delay = establishedVideoMd1 ? 1 : 1000
+
+          setTimeout(() => {
+            remoteMiniVideo.classList.remove('show')
+            remoteMiniVideo.srcObject = null
+            remoteScreenVideo.classList.add('show')
+            remoteScreenVideo.srcObject = trackCamVideo
+          }, delay)
         }
         if (msg.cam && msg.screen) {
           remoteMiniVideo.classList.add('show')
@@ -651,9 +759,6 @@ function connectSignaling() {
         try {
           if (!pc) await createPeerConnection();
 
-          // might from pc.remoteDescription.sdp after await pc.setRemoteDescription(msg.offer)
-          showFingerprint(msg.offer && msg.offer.sdp)
-
           const offerCollision = makingOffer || pc.signalingState !== 'stable';
           ignoreOffer = !polite && offerCollision;
           if (ignoreOffer) {
@@ -677,6 +782,13 @@ function connectSignaling() {
             const answer = await pc.createAnswer();
             answer.sdp = preferCodec(answer.sdp);
             await pc.setLocalDescription(answer);
+
+            // remote hex might from pc.remoteDescription.sdp after await pc.setRemoteDescription(msg.offer) but not on way
+            showFingerprint(
+              extractFingerprintHexFromSdp(pc.localDescription?.sdp) || null,
+              extractFingerprintHexFromSdp(msg.offer?.sdp) || null
+            )
+
             sendSignal({type: 'answer', answer: pc.localDescription});
           }
         } catch (e) {
@@ -688,15 +800,36 @@ function connectSignaling() {
 
       if (msg.type === 'answer') {
         try {
+          if (!pc || pc.connectionState === 'closed') {
+            console.warn('Dropping answer: no active pc');
+            return;
+          }
+          if (pc.remoteDescription && pc.remoteDescription.sdp === msg.answer.sdp) {
+            log('Duplicate answer, skipping')
+            return;
+          }
+          if (pc.signalingState !== 'have-local-offer') {
+            console.warn('Skipping unexpected answer in state', pc.signalingState)
+            if (!polite) {
+              await restartConnection()
+            }
+            return;
+          }
           await pc.setRemoteDescription(msg.answer);
+
+          showFingerprint(
+            extractFingerprintHexFromSdp(msg.answer?.sdp) || null,
+            extractFingerprintHexFromSdp(pc.localDescription?.sdp) || null
+          );
+
+          await flushPendingRemoteCandidates();
         } catch (e) {
           console.warn('setRemoteDescription(answer) failed', e);
           const text = (e && e.message) ? e.message.toLowerCase() : '';
-          if (text.includes('ice') || text.includes('restart')) {
+          if (text.includes('ice') || text.includes('restart') || text.includes('unknown ufrag')) {
             log('Detected ICE mismatch — recreating PeerConnection');
-            // проще: пересоздаём и инициируем пересогласование
             if (!polite) {
-              await recreatePeerConnectionAndRenegotiate();
+              await restartConnection()
             }
           } else {
             showNotify('Error setting remote description: ' + e.message);
@@ -708,13 +841,21 @@ function connectSignaling() {
       if (msg.type === 'candidate') {
         try {
           if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
-            // отбрасываем кандидата
-            console.warn('Dropping remote candidate: no remoteDescription yet', msg.candidate);
+            // буферизуем кандидат пока нет remoteDescription
+            console.warn('Buffering remote candidate: no remoteDescription yet', msg.candidate);
+            pendingRemoteCandidates.push(msg.candidate);
           } else {
             try {
               await pc.addIceCandidate(msg.candidate);
             } catch (err) {
               console.warn('addIceCandidate failed', err);
+              // если Unknown ufrag — кандидат старый, можно проигнорировать
+              const text = (err && err.message) ? err.message.toLowerCase() : '';
+              if (text.includes('unknown ufrag')) {
+                console.warn('Dropping candidate with unknown ufrag');
+              } else {
+                console.error(text)
+              }
             }
           }
         } catch (e) {
@@ -732,18 +873,31 @@ function connectSignaling() {
     };
 
     ws.onclose = (ev) => {
-      log('WebSocket closed', ev && ev.code, ev && ev.reason);
-      if (isJoined) {
-        showNotify('Connection lost. Trying to reconnect...');
-        setTimeout(connectSignaling, 2000);
+      wsConnecting = false
+      log('WebSocket closed', ev && ev.code, ev && ev.reason)
+
+      cleanupPeer()
+
+      if (wsReconnectTimeout) {
+        clearTimeout(wsReconnectTimeout)
+      }
+      wsReconnectTimeout = setTimeout(() => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          connectSignaling()
+        } else {
+          log('ws.onclose: socket already connecting/open, skip reconnect')
+        }
+      }, 2000)
+
+      if (!document.hidden) {
+        showNotify('Connection lost. Reconnecting...')
       }
 
-      cleanupPeer();
-
-      setTimeout(() => {
-        connectSignaling();
-      }, 2000);
-    };
+      try {
+        ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null
+      } catch (e) {
+      }
+    }
 
     ws.onerror = (e) => {
       console.error('WS error', e);
@@ -755,38 +909,54 @@ function connectSignaling() {
   }
 }
 
-async function fullRestartAsIfFirstConnect() {
-  log('fullRestartAsIfFirstConnect: start');
+async function restartConnection() {
+  log('restartConnection')
 
-  // close old pc
-  cleanupPeer();
-  flushQueue();
+  cleanupPeer()
 
-  // crate new pc
-  await createPeerConnection();
+  wsMessageQueue = []
+  log('restartConnection: wsMessageQueue cleared')
 
-  if (polite) {
-    log('Viewer (polite): waiting for new offer after restart');
-    return;
+  pendingRemoteCandidates = []
+
+  await createPeerConnection()
+
+  try {
+    await restoreLocalSenders()
+    log('restartConnection: restoreLocalSenders completed')
+  } catch (e) {
+    console.warn('restartConnection: restoreLocalSenders failed', e)
   }
 
-  // create offer
+  if (polite) {
+    log('restartConnection: polite viewer — waiting for new offer')
+    return
+  }
+
   try {
-    makingOffer = true;
-    const offer = await pc.createOffer();
-    offer.sdp = preferCodec(offer.sdp);
-    await pc.setLocalDescription(offer);
-    sendSignal({type: 'offer', offer: pc.localDescription});
-    log('Creator: new offer sent after restart');
-  } catch (err) {
-    console.error('Creator fullRestart: failed to create/send offer', err);
-  } finally {
-    makingOffer = false;
+    await forceRenegotiation()
+    log('restartConnection: forceRenegotiation done')
+  } catch (e) {
+    console.error('restartConnection: forceRenegotiation failed', e)
   }
 }
 
 function flushQueue() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // удалить старые офферы кроме последнего
+  let lastOfferIndex = -1
+  for (let i = wsMessageQueue.length - 1; i >= 0; i--) {
+    if (wsMessageQueue[i].type === 'offer') {
+      lastOfferIndex = i
+      break
+    }
+  }
+  if (lastOfferIndex >= 0) {
+    wsMessageQueue = wsMessageQueue.filter((m, i) => {
+      return !(m.type === 'offer' && i !== lastOfferIndex)
+    })
+  }
+
   while (wsMessageQueue.length) {
     const m = wsMessageQueue.shift();
     try {
@@ -801,18 +971,21 @@ function flushQueue() {
 }
 
 function sendSignal(obj) {
-  obj.room = room;
+  obj.room = room
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn('WS not OPEN, queueing', obj.type);
-      wsMessageQueue.push(obj);
-      return;
+      console.warn('WS not OPEN, queueing', obj.type)
+      wsMessageQueue.push(obj)
+      if (wsMessageQueue.length > 200) {
+        wsMessageQueue = wsMessageQueue.slice(-200)
+      }
+      return
     }
-    ws.send(JSON.stringify(obj));
-    log('Signal sent', obj.type);
+    ws.send(JSON.stringify(obj))
+    log('Signal sent', obj.type)
   } catch (e) {
-    console.error('sendSignal failed, queueing', e, obj);
-    wsMessageQueue.push(obj);
+    console.error('sendSignal failed, queueing', e, obj)
+    wsMessageQueue.push(obj)
   }
 }
 
@@ -838,6 +1011,8 @@ async function createPeerConnection() {
         }
 
         if (e.track.kind === 'video' && e.transceiver.mid === '1') { // 1 - cam
+          establishedVideoMd1 = true
+
           if (!remoteMiniVideo.srcObject) {
             remoteMiniVideo.srcObject = new MediaStream()
           }
@@ -880,24 +1055,43 @@ async function createPeerConnection() {
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
         if (!polite) {
           waitingPeer.classList.add('show')
+          forceRenegotiation()
         }
         showNotify('Connection lost!');
       }
     };
 
     pc.onnegotiationneeded = async () => {
-      if (makingOffer) return;
-      try {
-        makingOffer = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendSignal({type: 'offer', offer: pc.localDescription});
-      } catch (err) {
-        console.error('negotiationneeded error', err);
-      } finally {
-        makingOffer = false;
+      if (makingOffer) {
+        console.warn('Event pc.onnegotiationneeded err: already making')
+        return
       }
-    };
+      if (ignoreOffer) {
+        console.warn('Ignoring negotiationneeded due to ignoreOffer')
+        return
+      }
+
+      const now = Date.now()
+      if (now - lastNegotiationAt < negotiationDebounceMs) {
+        console.warn('Debounced frequent negotiationneeded')
+        return
+      }
+      lastNegotiationAt = now
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('WS not open — delaying negotiationneeded')
+        setTimeout(() => {
+          try {
+            if (pc && !makingOffer) pc.onnegotiationneeded?.()
+          } catch (e) {
+          }
+        }, 500)
+        return
+      }
+
+      log('Event pc.onnegotiationneeded')
+      await forceRenegotiation()
+    }
 
     try {
 
@@ -963,66 +1157,166 @@ function createSilentAudioTrack() {
 }
 
 async function forceRenegotiation() {
-  if (!pc) return;
+  if (!pc) {
+    console.error('forceRenegotiation err pc:', pc)
+    return
+  }
   try {
-    makingOffer = true;
-    const offer = await pc.createOffer();
-    offer.sdp = preferCodec(offer.sdp);
-    await pc.setLocalDescription(offer);
+    makingOffer = true
+    const offer = await pc.createOffer()
+    offer.sdp = preferCodec(offer.sdp)
+    await pc.setLocalDescription(offer)
     sendSignal({type: 'offer', offer: pc.localDescription});
-    log('Forced offer sent (renegotiation)');
+    log('Forced offer sent (renegotiation)')
   } catch (err) {
-    console.error('forceRenegotiation failed', err);
+    console.error('forceRenegotiation failed', err)
   } finally {
-    makingOffer = false;
+    makingOffer = false
   }
 }
 
-async function recreatePeerConnectionAndRenegotiate() {
-  log('Recreating PeerConnection...');
-  cleanupPeer();
-  await createPeerConnection();
-
-  if (!polite) {
-    try {
-      makingOffer = true;
-      const offer = await pc.createOffer();
-      offer.sdp = preferCodec(offer.sdp);
-      await pc.setLocalDescription(offer);
-      sendSignal({type: 'offer', offer: pc.localDescription});
-    } catch (err) {
-      console.error('Failed to create offer after recreation:', err);
-    } finally {
-      makingOffer = false;
+async function restoreLocalSenders() {
+  // try mic
+  try {
+    const micTrack = micStream?.getAudioTracks()[0] ?? null;
+    if (micTrack) {
+      if (micTransceiver && micTransceiver.sender) {
+        await micTransceiver.sender.replaceTrack(micTrack);
+        micTransceiver.direction = 'sendrecv';
+        log('Restored mic via transceiver.sender.replaceTrack()');
+      }
     }
+  } catch (err) {
+    console.warn('restoreLocalSenders: mic restore failed', err);
+  }
+
+  // try cam
+  try {
+    const camTrack = camStream?.getVideoTracks()[0] ?? null;
+    if (camTrack) {
+      if (camTransceiver && camTransceiver.sender) {
+        await camTransceiver.sender.replaceTrack(camTrack);
+        log('Restored cam via transceiver.sender.replaceTrack()');
+      }
+    }
+  } catch (err) {
+    console.warn('restoreLocalSenders: cam restore failed', err);
+  }
+
+  // try screen
+  try {
+    const screenVideo = screenStream?.getVideoTracks()[0] ?? null;
+    if (screenVideo) {
+      if (screenTransceiver && screenTransceiver.sender) {
+        await screenTransceiver.sender.replaceTrack(screenVideo);
+        log('Restored screen video via transceiver.sender.replaceTrack()');
+      }
+    }
+    const screenAudio = screenStream?.getAudioTracks()[0] ?? null;
+    if (screenAudio) {
+      if (screenAudioTransceiver && screenAudioTransceiver.sender) {
+        await screenAudioTransceiver.sender.replaceTrack(screenAudio);
+        log('Restored screen audio via transceiver.sender.replaceTrack()');
+      }
+    }
+  } catch (err) {
+    console.warn('restoreLocalSenders: screen restore failed', err);
+  }
+}
+
+async function flushPendingRemoteCandidates() {
+  if (!pendingRemoteCandidates.length || !pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
+  const list = pendingRemoteCandidates.splice(0); // забираем все
+  for (const c of list) {
+    try {
+      await pc.addIceCandidate(c);
+    } catch (err) {
+      console.warn('flush addIceCandidate failed', err);
+    }
+  }
+}
+
+function stopAndNullStream(ref) {
+  if (!ref) return;
+  try {
+    ref.getTracks().forEach(t => {
+      try {
+        t.stop();
+      } catch (e) {
+      }
+    });
+  } catch (e) {
   }
 }
 
 function cleanupPeer() {
   if (statsTimer) {
-    clearInterval(statsTimer);
-    statsTimer = null;
+    clearInterval(statsTimer)
+    statsTimer = null
   }
+
+  // close pc and remove refs
   if (pc) {
     try {
-      pc.close();
+      pc.ontrack = null
+      pc.onicecandidate = null
+      pc.onconnectionstatechange = null
+      pc.onnegotiationneeded = null
+      pc.close()
     } catch (e) {
     }
-    pc = null;
   }
-  remoteScreenVideo.srcObject = null;
-  prevStats = {};
-  makingOffer = false;
+  pc = null
+
+  // clear transceiver / sender refs so они не используются повторно
+  micSender = null
+  micTransceiver = null
+  camTransceiver = null
+  screenTransceiver = null
+  screenAudioTransceiver = null
+
+  // clear media elements / remote tracks containers
+  try {
+    remoteScreenVideo.srcObject = null
+  } catch (e) {
+  }
+  try {
+    remoteMiniVideo.srcObject = null
+  } catch (e) {
+  }
+  try {
+    remoteAudio.srcObject = null
+  } catch (e) {
+  }
+
+  prevStats = {}
+  makingOffer = false
+  ignoreOffer = false
+  establishedVideoMd1 = false
+
+  // clear candidate buffer
+  pendingRemoteCandidates = []
 }
 
 function cleanup() {
-  cleanupPeer();
-  if (ws) try {
-    ws.close();
-  } catch (e) {
+  cleanupPeer()
+
+  stopAndNullStream(micStream)
+  stopAndNullStream(camStream)
+  stopAndNullStream(screenStream)
+  micStream = camStream = screenStream = null
+
+  if (ws) {
+    try {
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null
+      ws.close()
+    } catch (e) {
+    }
   }
-  ws = null;
-  isJoined = false;
+  ws = null
+  wsMessageQueue = []
+  isJoined = false
+
   shareScreenBtn.classList.add('show')
   shareScreen.classList.remove('show')
   shareCamBtn.classList.add('show')
@@ -1183,32 +1477,123 @@ function startStats() {
   }, 1000);
 }
 
-function testParams() {
-  try {
-    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
-    if (sender) {
-      const params = sender.getParameters()
-      log(`sender params: ${JSON.stringify(params, null, 2)}`)
+async function getIceTransportInfo(pc) {
+  if (!pc) throw new Error('pc is required')
+  const stats = await pc.getStats()
+  let selectedPair = null
+
+  stats.forEach(report => {
+    if (report.type === 'candidate-pair' && (report.selected || report.nominated || report.state === 'succeeded')) {
+      // prefer explicit selected, else nominated/succeeded
+      if (!selectedPair) selectedPair = report
+      else {
+        // prefer report.selected first
+        if (report.selected && !selectedPair.selected) selectedPair = report
+      }
     }
-  } catch (err) {
-    console.error(`sender params err:`, err)
+  })
+
+  if (!selectedPair) {
+    let best = null
+    stats.forEach(report => {
+      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+        const score = (report.bytesSent || 0) + (report.bytesReceived || 0)
+        if (!best || score > ((best.bytesSent || 0) + (best.bytesReceived || 0))) best = report
+      }
+    })
+    selectedPair = best
   }
 
+  if (!selectedPair) return {ok: false, reason: 'no candidate-pair found'}
+
+  const localId = selectedPair.localCandidateId || selectedPair.localCandidateId
+  const remoteId = selectedPair.remoteCandidateId || selectedPair.remoteCandidateId
+
+  let local = null, remote = null
+  stats.forEach(r => {
+    if (!local && (r.type === 'local-candidate' || r.type === 'localcandidate')) {
+      if (r.id === localId || r.localCandidateId === localId) local = r
+    }
+    if (!remote && (r.type === 'remote-candidate' || r.type === 'remotecandidate')) {
+      if (r.id === remoteId || r.remoteCandidateId === remoteId) remote = r
+    }
+  })
+
+  // some browsers report candidate entries with slightly different field names
+  const getType = c => c?.candidateType || c?.type || c?.candidate?.type || null
+
+  const localType = getType(local) || 'unknown'
+  const remoteType = getType(remote) || 'unknown'
+
+  // map to human conclusion
+  let via = 'unknown'
+  if (localType === 'relay' || remoteType === 'relay') via = 'TURN (relayed)'
+  else if (localType === 'srflx' || remoteType === 'srflx') via = 'STUN (server-reflexive — P2P)'
+  else if (localType === 'host' && remoteType === 'host') via = 'direct (host — LAN)'
+  else if (localType === 'prflx' || remoteType === 'prflx') via = 'peer-reflexive (P2P)'
+  // return richer info
+  return {
+    ok: true,
+    pair: {
+      id: selectedPair.id,
+      state: selectedPair.state,
+      nominated: !!selectedPair.nominated,
+      selected: !!selectedPair.selected,
+      bytesSent: selectedPair.bytesSent,
+      bytesReceived: selectedPair.bytesReceived,
+      protocol: selectedPair.protocol || null,
+    },
+    local: local ? {
+      id: local.id,
+      ip: local.ip || local.address || local.candidate?.ip || null,
+      port: local.port || local.portNumber || local.candidate?.port || null,
+      type: localType,
+      address: local.address || local.ip || null,
+      candidate: local.candidate || null
+    } : null,
+    remote: remote ? {
+      id: remote.id,
+      ip: remote.ip || remote.address || remote.candidate?.ip || null,
+      port: remote.port || remote.portNumber || remote.candidate?.port || null,
+      type: remoteType,
+      address: remote.address || remote.ip || null,
+      candidate: remote.candidate || null
+    } : null,
+    conclusion: via
+  }
+}
+
+function info() {
+  log('pc.getSenders()')
+  console.table(pc.getSenders().map((s, i) => ({
+    i,
+    trackId: s.track?.id ?? null,
+    kind: s.track?.kind ?? null,
+    readyState: s.track?.readyState ?? null,
+    trackLabel: s.track?.label ?? null,
+    params: JSON.stringify(s.getParameters())
+  })))
+
+  log('pc.getReceivers()')
   console.table(pc.getReceivers().map((r, i) => ({
     i,
     trackId: r.track?.id ?? null,
     kind: r.track?.kind ?? null,
     readyState: r.track?.readyState ?? null,
-    trackLabel: r.track?.label ?? null
-  })));
+    trackLabel: r.track?.label ?? null,
+    params: JSON.stringify(r.getParameters())
+  })))
 
+  log('pc.getTransceivers()')
   console.table(pc.getTransceivers().map((t, i) => ({
     i,
     mid: t.mid ?? null,
     direction: t.direction,
     senderTrack: t.sender?.track?.id ?? null,
-    receiverTrack: t.receiver?.track?.id ?? null
-  })));
+    receiverTrack: t.receiver?.track?.id ?? null,
+  })))
+
+  getIceTransportInfo(pc).then(log).catch(console.error)
 }
 
 function testStun() {
