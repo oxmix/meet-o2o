@@ -34,22 +34,60 @@
       flex-direction: column;
     }
 
-    .create h1,
-    .create h2 {
-      color: white;
+    .create h3 span:first-child {
+      display: inline;
+    }
+
+    .create h3 span:last-child {
+      display: none;
     }
 
     .create.show {
       display: flex;
     }
 
-    .create select {
+    .create .qualities {
+      margin: 0 auto 45px;
+    }
+
+    .create .qualities > div {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center
+    }
+
+    .create .qualities select {
       font-size: 24px;
+      margin-right: 16px;
+      margin-bottom: 16px;
+    }
+
+    .create .qualities select:last-child {
+      margin-right: 0;
+    }
+
+    .create .rec-bandwidth {
+      color: grey;
+      margin: 8px auto
+    }
+
+    .create .rec-bandwidth span {
+      margin-left: 6px;
     }
 
     .create .btn {
       font-size: 28px;
       background-color: mediumorchid;
+    }
+
+    .join .btn span:first-child,
+    .create .btn span:first-child {
+      display: inline;
+    }
+
+    .join .btn span:last-child,
+    .create .btn span:last-child {
+      display: none;
     }
 
     .create .btn:hover {
@@ -72,6 +110,30 @@
 
     .join .btn:hover {
       background-color: forestgreen;
+    }
+
+    @media only screen and (max-width: 926px) {
+      .create h3 span:first-child {
+        display: none;
+      }
+
+      .create h3 span:last-child {
+        display: inline;
+      }
+
+      .create .qualities {
+        display: none;
+      }
+
+      .join .btn span:first-child,
+      .create .btn span:first-child {
+        display: none;
+      }
+
+      .join .btn span:last-child,
+      .create .btn span:last-child {
+        display: inline;
+      }
     }
 
     .chat {
@@ -178,6 +240,27 @@
 
     .share-screen-btn.show {
       display: flex;
+    }
+
+    @media only screen and (max-width: 926px) {
+      .share-cam.show,
+      .share-cam video {
+        width: 90px;
+        height: 160px;
+        margin-right: 8px;
+        bottom: 28px;
+      }
+
+      .share-screen-btn.show {
+        display: none;
+      }
+
+      .stats .outbound > div.show,
+      .stats .inbound > div.show,
+      .stats .outbound .vals,
+      .stats .inbound .vals {
+        justify-content: center;
+      }
     }
 
     .share-screen {
@@ -337,6 +420,7 @@
       left: 0;
       right: 0;
       transition: background-color ease .15s;
+      white-space: nowrap;
     }
 
     .stats:not(.hide):hover {
@@ -380,6 +464,8 @@
     .stats .outbound > div.show,
     .stats .inbound > div.show {
       display: flex;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .stats.hide .outbound > div.show,
@@ -389,6 +475,12 @@
 
     .stats .outbound > div {
       justify-content: right;
+    }
+
+    .stats .outbound .vals,
+    .stats .inbound .vals {
+      display: flex;
+      flex-wrap: wrap;
     }
 
     .stats .outbound .vals span,
@@ -487,18 +579,22 @@
 <div class="create">
   <div style="margin: 30px auto; text-align: center">
     <h1 style="font-size: 50px; margin: 0">Meet o2o</h1>
-    <h3 style="color: grey">Screen sharing via WebRTC (P2P)</h3>
+    <h3 style="color: grey">
+      <span>Screen sharing</span>
+      <span>Voice and Video calling</span>
+      via WebRTC (P2P)
+    </h3>
   </div>
-  <div style="margin: auto;">
-    <div style="display: flex">
-      <select style="margin-right: 18px" id="select-resolution" autocomplete="off">
+  <div class="qualities">
+    <div>
+      <select id="select-resolution" autocomplete="off">
         <option value="640x480">SD 480p</option>
         <option value="1280x720">HD 720p</option>
         <option selected value="1920x1080">FHD 1080p</option>
         <option value="2560x1440">QHD 2k</option>
         <option value="3840x2160">UHD 4k</option>
       </select>
-      <select style="margin-right: 18px" id="select-fps" autocomplete="off">
+      <select id="select-fps" autocomplete="off">
         <option value="5">5 FPS</option>
         <option value="15">15 FPS</option>
         <option selected value="30">30 FPS</option>
@@ -512,19 +608,25 @@
         <option value="AV1">AV1</option>
       </select>
     </div>
-    <div class="rec-bandwidth" style="color: grey; text-align: center; margin: 16px auto">
+    <div class="rec-bandwidth">
       Recommended bandwidth: <span>4 Mb/s</span>
     </div>
-    <div style="margin: 46px auto; text-align: center">
-      <button class="btn">Create room</button>
-    </div>
+  </div>
+  <div style="margin: auto">
+    <button class="btn">
+      <span>Create Room</span>
+      <span>Make Video Call</span>
+    </button>
   </div>
   <div class="git">
     <a target="_blank" href="https://github.com/oxmix/meet-o2o">github.com/oxmix/meet-o2o</a>
   </div>
 </div>
 <div class="join">
-  <button class="btn">Join room</button>
+  <button class="btn">
+    <span>Join Room</span>
+    <span>Answer Call</span>
+  </button>
 </div>
 <div class="chat">
   <div class="remote-section">
