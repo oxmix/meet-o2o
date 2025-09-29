@@ -352,7 +352,7 @@ function soundEffect(stream, to) {
   source.connect(analyser);
 
   function update() {
-    if (stopEffectScreen) {
+    if (stopEffectScreen && to.classList.contains('share-cam')) {
       to.style.boxShadow = 'none'
       return
     }
@@ -768,14 +768,19 @@ function connectSignaling() {
 
           if (offerCollision) {
             try {
-              await pc.setLocalDescription({type: 'rollback'});
+              await Promise.all([
+                pc.setLocalDescription({ type: 'rollback' }),
+                pc.setRemoteDescription(msg.offer),
+              ])
               log('Performed local rollback before applying remote offer');
             } catch (rbErr) {
               console.warn('Rollback failed or not needed:', rbErr);
             }
+          } else {
+            await pc.setRemoteDescription(msg.offer)
           }
 
-          await pc.setRemoteDescription(msg.offer);
+          await flushPendingRemoteCandidates()
 
           // Простая версия: сразу создаём answer если состояние это позволяет
           if (pc.signalingState === 'have-remote-offer') {
@@ -1071,6 +1076,12 @@ async function createPeerConnection() {
         return
       }
 
+      // try to fix: waiting stable
+      if (!pc || pc.signalingState !== 'stable') {
+        log('negotiationneeded ignored: signalingState=', pc?.signalingState);
+        return;
+      }
+
       const now = Date.now()
       if (now - lastNegotiationAt < negotiationDebounceMs) {
         console.warn('Debounced frequent negotiationneeded')
@@ -1164,6 +1175,10 @@ async function forceRenegotiation() {
   try {
     makingOffer = true
     const offer = await pc.createOffer()
+    if (pc.signalingState !== 'stable') {
+      log('negotiation race detected: abort local offer');
+      return;
+    }
     offer.sdp = preferCodec(offer.sdp)
     await pc.setLocalDescription(offer)
     sendSignal({type: 'offer', offer: pc.localDescription});
