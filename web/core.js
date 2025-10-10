@@ -98,15 +98,18 @@ if (qRes) {
     roomHeight = parseInt(qxRes[1])
     document.querySelector('#select-resolution').value = qRes
   }
-
-  document.querySelector('#select-fps').value = roomFps =
-    parseInt(localStorage.getItem('q-fps') || roomFps)
+}
+const qFps = localStorage.getItem('q-fps')
+if (qFps) {
+  document.querySelector('#select-fps').value = roomFps = parseInt(qFps)
 
   roomBitrate = roomWidth * roomHeight * roomFps * .065
-
-  document.querySelector('#select-codec').value = roomCodec =
-    localStorage.getItem('q-codec') || roomCodec
-
+}
+const qCodec = localStorage.getItem('q-codec')
+if (qCodec) {
+  document.querySelector('#select-codec').value = roomCodec = qCodec
+}
+if (qRes || qFps || qCodec) {
   calcBitrate()
 }
 
@@ -769,7 +772,7 @@ function connectSignaling() {
           if (offerCollision) {
             try {
               await Promise.all([
-                pc.setLocalDescription({ type: 'rollback' }),
+                pc.setLocalDescription({type: 'rollback'}),
                 pc.setRemoteDescription(msg.offer),
               ])
               log('Performed local rollback before applying remote offer');
