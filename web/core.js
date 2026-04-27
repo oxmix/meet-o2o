@@ -42,6 +42,13 @@ const inboundScrAEl = statsEl.querySelector('.in-screen-a .vals')
 const notifyMsg = document.querySelector('.notify');
 const waitingPeer = document.querySelector('.waiting-peer');
 const topWarn = document.querySelector('.top-warn')
+const settingsBtn = document.querySelector('.top-right .settings-btn')
+const settingsModal = document.querySelector('.settings-modal')
+const settingsCard = settingsModal.querySelector('.settings-card')
+const settingsCloseBtn = settingsModal.querySelector('.btn-close-settings')
+const selMic = settingsModal.querySelector('.sel-mic')
+const selSpeaker = settingsModal.querySelector('.sel-speaker')
+const selCam = settingsModal.querySelector('.sel-cam')
 
 /* state */
 let ws;
@@ -308,11 +315,15 @@ function generateName() {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+let micDeviceId = localStorage.getItem('dev-mic') || ''
+let camDeviceId = localStorage.getItem('dev-cam') || ''
+let speakerDeviceId = localStorage.getItem('dev-speaker') || ''
+
 async function initMic() {
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
-    });
+    const audioCons = {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
+    if (micDeviceId) audioCons.deviceId = {ideal: micDeviceId}
+    micStream = await navigator.mediaDevices.getUserMedia({audio: audioCons});
 
     if (micStream) {
       const sender = micSender || micTransceiver.sender
@@ -1011,43 +1022,51 @@ async function createPeerConnection() {
       log('New track received:', e.track.kind, 'mid:', e.transceiver.mid, 'data:', e)
       try {
         if (e.track.kind === 'audio') {
-          if (!remoteAudio.srcObject) remoteAudio.srcObject = new MediaStream()
-          if (!remoteAudio.srcObject.getTracks().some(t => t.id === e.track.id)) {
-            remoteAudio.srcObject.addTrack(e.track)
-            log('Added audio track to remoteAudio:', e.track)
+          const aStream = remoteAudio.srcObject instanceof MediaStream
+            ? remoteAudio.srcObject : new MediaStream()
+          if (!aStream.getTracks().some(t => t.id === e.track.id)) {
+            aStream.addTrack(e.track)
           }
+          // re-assign forces Chrome to bind the new track to the element
+          remoteAudio.srcObject = aStream
+          remoteAudio.play().catch(err => console.warn('remoteAudio.play failed:', err))
+          log('Added audio track to remoteAudio:', e.track)
         }
 
         if (e.track.kind === 'video' && e.transceiver.mid === '1') { // 1 - cam
           establishedVideoMd1 = true
 
-          if (!remoteMiniVideo.srcObject) {
-            remoteMiniVideo.srcObject = new MediaStream()
+          // rebuild stream around the fresh track — addTrack on an already-bound
+          // MediaStream is not always picked up by Chrome after renegotiation
+          trackCamVideo = new MediaStream([e.track])
+          if (remoteMiniVideo.srcObject) {
+            remoteMiniVideo.srcObject = trackCamVideo
           }
-          if (!remoteMiniVideo.srcObject.getTracks().some(t => t.id === e.track.id)) {
-            remoteMiniVideo.srcObject.addTrack(e.track)
-            trackCamVideo.addTrack(e.track)
-            log('Added video screen track:', e.track)
+          if (remoteScreenVideo.srcObject && !state.screen) {
+            // big view was holding cam (cam-only state) — refresh it
+            remoteScreenVideo.srcObject = trackCamVideo
           }
-          remoteMiniVideo.addEventListener('canplay', (e) => {
-            e.target.classList.add('show');
-            e.target.play().catch(err => console.warn('remoteMiniVideo.play failed:', err));
+          remoteMiniVideo.addEventListener('canplay', function onCanPlay(ev) {
+            ev.target.removeEventListener('canplay', onCanPlay)
+            ev.target.classList.add('show')
+            ev.target.play().catch(err => console.warn('remoteMiniVideo.play failed:', err))
           })
+          log('Bound cam video track:', e.track)
         }
 
         if (e.track.kind === 'video' && e.transceiver.mid === '2') { // 2 - screen
-          if (!remoteScreenVideo.srcObject) {
-            remoteScreenVideo.srcObject = new MediaStream()
+          trackScreenVideo = new MediaStream([e.track])
+          // if big view was already attached (state arrived first), re-bind so
+          // Chrome actually starts decoding the new track
+          if (remoteScreenVideo.srcObject) {
+            remoteScreenVideo.srcObject = trackScreenVideo
           }
-          if (!remoteScreenVideo.srcObject.getTracks().some(t => t.id === e.track.id)) {
-            remoteScreenVideo.srcObject.addTrack(e.track)
-            trackScreenVideo.addTrack(e.track)
-            log('Added video cam track:', e.track)
-          }
-          remoteScreenVideo.addEventListener('canplay', (e) => {
-            e.target.classList.add('show');
-            e.target.play().catch(err => console.warn('remoteScreenVideo.play failed:', err));
+          remoteScreenVideo.addEventListener('canplay', function onCanPlay(ev) {
+            ev.target.removeEventListener('canplay', onCanPlay)
+            ev.target.classList.add('show')
+            ev.target.play().catch(err => console.warn('remoteScreenVideo.play failed:', err))
           })
+          log('Bound screen video track:', e.track)
         }
       } catch (err) {
         console.warn('ontrack handler error', err);
@@ -1613,6 +1632,144 @@ function info() {
 
   getIceTransportInfo(pc).then(log).catch(console.error)
 }
+
+/* Settings: live device switching without renegotiation */
+settingsBtn.addEventListener('click', async () => {
+  await refreshDeviceSelects()
+  settingsModal.classList.add('show')
+})
+settingsCloseBtn.addEventListener('click', () => settingsModal.classList.remove('show'))
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) settingsModal.classList.remove('show')
+})
+settingsCard.addEventListener('click', (e) => e.stopPropagation())
+
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (settingsModal.classList.contains('show')) refreshDeviceSelects()
+  })
+}
+
+async function refreshDeviceSelects() {
+  let devices = []
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices()
+  } catch (err) {
+    console.warn('enumerateDevices failed', err)
+    return
+  }
+
+  const fill = (sel, kind, currentId, fallbackLabel) => {
+    while (sel.firstChild) sel.removeChild(sel.firstChild)
+    const items = devices.filter(d => d.kind === kind && d.deviceId)
+    if (!items.length) {
+      const o = document.createElement('option')
+      o.value = ''
+      o.textContent = '(no devices)'
+      sel.appendChild(o)
+      sel.disabled = true
+      return
+    }
+    sel.disabled = false
+    items.forEach((d, i) => {
+      const o = document.createElement('option')
+      o.value = d.deviceId
+      o.textContent = d.label || `${fallbackLabel} ${i + 1}`
+      sel.appendChild(o)
+    })
+    if (currentId && items.some(d => d.deviceId === currentId)) {
+      sel.value = currentId
+    }
+  }
+
+  const curMicId = micStream?.getAudioTracks()[0]?.getSettings?.().deviceId || micDeviceId
+  const curCamId = camStream?.getVideoTracks()[0]?.getSettings?.().deviceId || camDeviceId
+  fill(selMic, 'audioinput', curMicId, 'Microphone')
+  fill(selSpeaker, 'audiooutput', speakerDeviceId, 'Speaker')
+  fill(selCam, 'videoinput', curCamId, 'Camera')
+
+  if (typeof remoteAudio.setSinkId !== 'function') {
+    selSpeaker.disabled = true
+    selSpeaker.title = 'Output device selection not supported in this browser'
+  }
+  if (!camStream) {
+    selCam.title = 'Camera selection will apply when you start sharing'
+  } else {
+    selCam.removeAttribute('title')
+  }
+}
+
+selMic.addEventListener('change', async () => {
+  const id = selMic.value
+  if (!id) return
+  micDeviceId = id
+  localStorage.setItem('dev-mic', id)
+  try {
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: {exact: id},
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true
+      }
+    })
+    const newTrack = newStream.getAudioTracks()[0]
+    newTrack.enabled = !state.micMute
+    const sender = micSender || micTransceiver?.sender
+    if (sender) await sender.replaceTrack(newTrack)
+    try { micStream?.getTracks().forEach(t => t.stop()) } catch (e) {}
+    micStream = newStream
+    log('Mic switched to', id)
+  } catch (err) {
+    console.error('Mic switch failed', err)
+    showNotify('Failed to switch microphone: ' + err.message)
+  }
+})
+
+selSpeaker.addEventListener('change', async () => {
+  const id = selSpeaker.value
+  speakerDeviceId = id
+  localStorage.setItem('dev-speaker', id)
+  if (typeof remoteAudio.setSinkId !== 'function') {
+    showNotify('Output device selection not supported here')
+    return
+  }
+  try {
+    await remoteAudio.setSinkId(id)
+    log('Speaker switched to', id)
+  } catch (err) {
+    console.error('Speaker switch failed', err)
+    showNotify('Failed to switch speaker: ' + err.message)
+  }
+})
+
+selCam.addEventListener('change', async () => {
+  const id = selCam.value
+  if (!id) return
+  camDeviceId = id
+  localStorage.setItem('dev-cam', id)
+  if (!camStream) {
+    log('Cam not active — saved selection will apply on next start')
+    return
+  }
+  try {
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId: {exact: id},
+        width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}
+      }
+    })
+    const newTrack = newStream.getVideoTracks()[0]
+    newTrack._kind = 'camera'
+    newTrack.addEventListener('ended', stopCamShare)
+    if (camTransceiver?.sender) await camTransceiver.sender.replaceTrack(newTrack)
+    localCamVideo.srcObject = new MediaStream([newTrack])
+    try { camStream?.getTracks().forEach(t => t.stop()) } catch (e) {}
+    camStream = newStream
+    log('Camera switched to', id)
+  } catch (err) {
+    console.error('Camera switch failed', err)
+    showNotify('Failed to switch camera: ' + err.message)
+  }
+})
 
 function testStun() {
   (function (servers) {

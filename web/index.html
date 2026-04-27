@@ -375,6 +375,24 @@
       flex-direction: column;
     }
 
+    .top-right .top-row {
+      display: flex;
+      align-items: center;
+    }
+
+    .top-right .top-row .settings-btn {
+      display: flex;
+      height: 35px;
+      align-items: center;
+      border-radius: 6px;
+      margin-right: 8px;
+      padding: 8px 12px;
+    }
+
+    .top-right .top-row .settings-btn svg {
+      margin-right: 0;
+    }
+
     .top-right .leave-btn {
       display: flex;
       height: 35px;
@@ -382,6 +400,69 @@
       margin: 28px 0;
       border-radius: 8px 0 0 8px;
       padding-right: 16px;
+    }
+
+    .settings-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #000a;
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+    }
+
+    .settings-modal.show {
+      display: flex;
+    }
+
+    .settings-card {
+      background: #1c1c1c;
+      border: 1px solid #fff3;
+      border-radius: 12px;
+      padding: 24px;
+      min-width: 360px;
+      max-width: 92vw;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 8px 40px #000a;
+    }
+
+    .settings-card h3 {
+      margin: 0 0 6px;
+      font-weight: 500;
+    }
+
+    .settings-card .row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .settings-card .row > label {
+      color: #aaa;
+      font-size: 13px;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    .settings-card select,
+    .settings-card .row button {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .settings-card select:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    .settings-card .actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 6px;
     }
 
     .top-right .mic-btn {
@@ -649,24 +730,32 @@
       </svg>
       Exit
     </button>
-    <div class="mic-btn">
-      <button>
+    <div class="top-row">
+      <button class="settings-btn" title="Devices settings">
         <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24">
           <path fill="currentColor"
-                d="M12 16c2.206 0 4-1.794 4-4V6c0-2.217-1.785-4.021-3.979-4.021a1 1 0 0 0-.209.025A4.006 4.006 0 0 0 8 6v6c0 2.206 1.794 4 4 4" />
-          <path fill="currentColor"
-                d="M11 19.931V22h2v-2.069c3.939-.495 7-3.858 7-7.931h-2c0 3.309-2.691 6-6 6s-6-2.691-6-6H4c0 4.072 3.061 7.436 7 7.931" />
+                d="M19.14 12.94c.04-.31.06-.62.06-.94c0-.32-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.07.63-.07.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61zM12 15.6A3.6 3.6 0 0 1 8.4 12A3.6 3.6 0 0 1 12 8.4a3.6 3.6 0 0 1 3.6 3.6a3.6 3.6 0 0 1-3.6 3.6" />
         </svg>
-        Mute
       </button>
-      <button>
-        <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24">
-          <path fill="currentColor"
-                d="m21.707 20.293l-3.4-3.4A7.93 7.93 0 0 0 20 12h-2a5.95 5.95 0 0 1-1.119 3.467l-1.449-1.45A3.9 3.9 0 0 0 16 12V6c0-2.217-1.785-4.021-3.979-4.021q-.105 0-.209.025A4.006 4.006 0 0 0 8 6v.586L3.707 2.293L2.293 3.707l18 18zM6 12H4c0 4.072 3.06 7.436 7 7.931V22h2v-2.069a8 8 0 0 0 2.241-.63l-1.549-1.548A6 6 0 0 1 12 18c-3.309 0-6-2.691-6-6" />
-          <path fill="currentColor" d="M8.007 12.067a3.996 3.996 0 0 0 3.926 3.926z" />
-        </svg>
-        Unmute
-      </button>
+      <div class="mic-btn">
+        <button>
+          <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24">
+            <path fill="currentColor"
+                  d="M12 16c2.206 0 4-1.794 4-4V6c0-2.217-1.785-4.021-3.979-4.021a1 1 0 0 0-.209.025A4.006 4.006 0 0 0 8 6v6c0 2.206 1.794 4 4 4" />
+            <path fill="currentColor"
+                  d="M11 19.931V22h2v-2.069c3.939-.495 7-3.858 7-7.931h-2c0 3.309-2.691 6-6 6s-6-2.691-6-6H4c0 4.072 3.061 7.436 7 7.931" />
+          </svg>
+          Mute
+        </button>
+        <button>
+          <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24">
+            <path fill="currentColor"
+                  d="m21.707 20.293l-3.4-3.4A7.93 7.93 0 0 0 20 12h-2a5.95 5.95 0 0 1-1.119 3.467l-1.449-1.45A3.9 3.9 0 0 0 16 12V6c0-2.217-1.785-4.021-3.979-4.021q-.105 0-.209.025A4.006 4.006 0 0 0 8 6v.586L3.707 2.293L2.293 3.707l18 18zM6 12H4c0 4.072 3.06 7.436 7 7.931V22h2v-2.069a8 8 0 0 0 2.241-.63l-1.549-1.548A6 6 0 0 1 12 18c-3.309 0-6-2.691-6-6" />
+            <path fill="currentColor" d="M8.007 12.067a3.996 3.996 0 0 0 3.926 3.926z" />
+          </svg>
+          Unmute
+        </button>
+      </div>
     </div>
   </div>
   <div class="share">
@@ -694,6 +783,26 @@
       <video autoplay muted playsinline disablepictureinpicture="true"></video>
       <div class="controls">
         <button class="share-stop-btn">Stop share</button>
+      </div>
+    </div>
+  </div>
+  <div class="settings-modal">
+    <div class="settings-card">
+      <h3>Devices</h3>
+      <div class="row">
+        <label>Microphone (input)</label>
+        <select class="sel-mic" autocomplete="off"></select>
+      </div>
+      <div class="row">
+        <label>Speakers (output)</label>
+        <select class="sel-speaker" autocomplete="off"></select>
+      </div>
+      <div class="row">
+        <label>Camera</label>
+        <select class="sel-cam" autocomplete="off"></select>
+      </div>
+      <div class="actions">
+        <button class="btn-close-settings">Close</button>
       </div>
     </div>
   </div>
