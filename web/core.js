@@ -497,7 +497,7 @@ shareScreenBtn.onclick = async () => {
     if (!vidSender) {
       screenTransceiver = pc.getTransceivers().find(t => t.mid === '2')
       screenTransceiver.direction = 'sendrecv'
-      prefersVidCodec(screenTransceiver)
+      applyVideoCodecPreferences()
       vidSender = screenTransceiver.sender
     }
     await vidSender.replaceTrack(screenVideoTrack)
@@ -781,25 +781,18 @@ function connectSignaling() {
           }
 
           if (offerCollision) {
-            try {
-              await Promise.all([
-                pc.setLocalDescription({type: 'rollback'}),
-                pc.setRemoteDescription(msg.offer),
-              ])
-              log('Performed local rollback before applying remote offer');
-            } catch (rbErr) {
-              console.warn('Rollback failed or not needed:', rbErr);
-            }
-          } else {
-            await pc.setRemoteDescription(msg.offer)
+            await pc.setLocalDescription({type: 'rollback'})
+            log('Performed local rollback before applying remote offer');
           }
+
+          await setRemoteDescriptionWithDiagnostics(msg.offer, 'offer')
 
           await flushPendingRemoteCandidates()
 
           // Простая версия: сразу создаём answer если состояние это позволяет
           if (pc.signalingState === 'have-remote-offer') {
+            applyVideoCodecPreferences()
             const answer = await pc.createAnswer();
-            answer.sdp = preferCodec(answer.sdp);
             await pc.setLocalDescription(answer);
 
             // remote hex might from pc.remoteDescription.sdp after await pc.setRemoteDescription(msg.offer) but not on way
@@ -834,7 +827,7 @@ function connectSignaling() {
             }
             return;
           }
-          await pc.setRemoteDescription(msg.answer);
+          await setRemoteDescriptionWithDiagnostics(msg.answer, 'answer');
 
           showFingerprint(
             extractFingerprintHexFromSdp(msg.answer?.sdp) || null,
@@ -1140,7 +1133,7 @@ async function createPeerConnection() {
           direction: 'sendrecv',
           sendEncodings: [{maxBitrate: roomBitrate}]
         });
-        prefersVidCodec(screenTransceiver)
+        applyVideoCodecPreferences()
         screenAudioTransceiver = pc.addTransceiver('audio', {
           direction: 'sendrecv',
           sendEncodings: [{maxBitrate: 128000}]
@@ -1164,19 +1157,65 @@ async function createPeerConnection() {
   }
 }
 
-function prefersVidCodec(transceiver) {
+function isVideoTransceiver(transceiver) {
+  return transceiver?.receiver?.track?.kind === 'video'
+    || transceiver?.sender?.track?.kind === 'video'
+}
+
+function codecMimeMatches(codec, preferredCodec) {
+  return codec?.mimeType?.toLowerCase() === `video/${preferredCodec}`.toLowerCase()
+}
+
+function applyVideoCodecPreferences() {
+  if (!pc || typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function') return
+
   const caps = RTCRtpSender.getCapabilities('video');
-  if (caps && caps.codecs) {
-    log('Available codecs:', caps.codecs)
-    const prefer = caps.codecs.filter(c =>
-      (new RegExp(roomCodec, 'i')).test(c.mimeType));
-    const others = caps.codecs.filter(c =>
-      !(new RegExp(roomCodec, 'i')).test(c.mimeType));
-    if (prefer.length) {
-      transceiver.setCodecPreferences([...prefer, ...others]);
-      log(`Codec preferences set: ${roomCodec} first:`, prefer);
+  if (!caps?.codecs?.length) return
+
+  const prefer = caps.codecs.filter(c => codecMimeMatches(c, roomCodec));
+  if (!prefer.length) {
+    console.warn(`Codec ${roomCodec} is not available for video`, caps.codecs);
+    return
+  }
+
+  const others = caps.codecs.filter(c => !codecMimeMatches(c, roomCodec));
+  const preferredCodecs = [...prefer, ...others];
+  const transceivers = pc.getTransceivers().filter(isVideoTransceiver);
+
+  for (const transceiver of transceivers) {
+    try {
+      transceiver.setCodecPreferences(preferredCodecs);
+      log(`Codec preferences set for video transceiver ${transceiver.mid ?? '(pending)'}: ${roomCodec} first`, prefer);
+    } catch (err) {
+      console.warn('setCodecPreferences failed', err, {
+        codec: roomCodec,
+        mid: transceiver.mid,
+      });
     }
   }
+}
+
+async function setRemoteDescriptionWithDiagnostics(description, kind) {
+  try {
+    await pc.setRemoteDescription(description)
+  } catch (err) {
+    console.warn(`setRemoteDescription(${kind}) failed; SDP diagnostics:`, summarizeSdpCodecs(description?.sdp));
+    throw err
+  }
+}
+
+function summarizeSdpCodecs(sdp) {
+  if (!sdp) return null
+
+  const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
+  return sdp
+    .split(eol)
+    .filter(line =>
+      line.startsWith('m=video')
+      || line.startsWith('a=mid:')
+      || line.startsWith('a=rtpmap:')
+      || line.startsWith('a=fmtp:')
+    )
 }
 
 function createSilentAudioTrack() {
@@ -1196,12 +1235,12 @@ async function forceRenegotiation() {
   }
   try {
     makingOffer = true
+    applyVideoCodecPreferences()
     const offer = await pc.createOffer()
     if (pc.signalingState !== 'stable') {
       log('negotiation race detected: abort local offer');
       return;
     }
-    offer.sdp = preferCodec(offer.sdp)
     await pc.setLocalDescription(offer)
     sendSignal({type: 'offer', offer: pc.localDescription});
     log('Forced offer sent (renegotiation)')
@@ -1358,28 +1397,6 @@ function cleanup() {
   shareScreen.classList.remove('show')
   shareCamBtn.classList.add('show')
   shareCam.classList.remove('show')
-}
-
-function preferCodec(sdp) {
-  if (!sdp) return sdp;
-  const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
-  const sections = sdp.split(eol);
-  const mIndex = sections.findIndex(l => l.startsWith('m=video'));
-  if (mIndex === -1) return sdp;
-  const rtpmapRegex = new RegExp('a=rtpmap:(\\d+) ' + roomCodec + '/', 'i');
-  let preferredPayloads = [];
-  for (const line of sections) {
-    const m = line.match(rtpmapRegex);
-    if (m) preferredPayloads.push(m[1]);
-  }
-  if (preferredPayloads.length === 0) return sdp;
-  const mLineParts = sections[mIndex].split(' ');
-  const header = mLineParts.slice(0, 3);
-  const payloads = mLineParts.slice(3);
-  const remaining = payloads.filter(p => !preferredPayloads.includes(p));
-  const newPayloads = preferredPayloads.concat(remaining);
-  sections[mIndex] = header.concat(newPayloads).join(' ');
-  return sections.join(eol);
 }
 
 function startStats() {
