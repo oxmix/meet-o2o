@@ -166,6 +166,160 @@
       margin-bottom: 28px;
     }
 
+    .chat-box {
+      position: fixed;
+      left: 0;
+      bottom: 190px;
+      width: 300px;
+      display: flex;
+      flex-direction: column;
+      background-color: #0003;
+      backdrop-filter: blur(13px);
+      border-radius: 0 8px 8px 0;
+      z-index: 50;
+      overflow: hidden;
+      font-size: 1rem;
+    }
+
+    .chat-box.collapsed {
+      width: auto;
+    }
+
+    .chat-box.collapsed {
+      background-color: #fff2;
+      height: 35px;
+      justify-content: center;
+    }
+
+    .chat-box.collapsed .chat-body {
+      display: none;
+    }
+
+    .chat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px 8px 16px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .chat-box:not(.collapsed) .chat-header {
+      border-bottom: 1px solid #fff2;
+    }
+
+    .chat-header .chat-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chat-header .chat-unread {
+      display: none;
+      background-color: #f55;
+      color: white;
+      font-size: 12px;
+      border-radius: 9px;
+      padding: 3px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    .chat-header .chat-unread.show {
+      display: inline-block;
+    }
+
+    .chat-body {
+      display: flex;
+      flex-direction: column;
+      height: 280px;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+      font-size: 1rem;
+      line-height: 1.3;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+      scrollbar-color: #5555 transparent;
+      scrollbar-width: thin;
+      transition: scrollbar-color .3s ease;
+    }
+
+    .chat-messages .msg {
+      margin-bottom: 8px;
+    }
+
+    .chat-messages .msg .who {
+      color: #9ad;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+
+    .chat-messages .msg.me .who {
+      color: #aea;
+    }
+
+    .chat-messages .msg.sys {
+      color: #888;
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    .chat-messages a {
+      color: #6bf;
+      text-decoration: underline;
+      word-break: break-all;
+    }
+
+    .chat-messages a:hover {
+      color: #9cf;
+    }
+
+    .chat-input {
+      display: flex;
+      border-top: 1px solid #5555;
+    }
+
+    .chat-input textarea {
+      flex: 1;
+      background: #1115;
+      border: none;
+      color: white;
+      padding: 8px 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      line-height: 1.2;
+      resize: none;
+      outline: none;
+      box-sizing: border-box;
+      min-height: 36px;
+      max-height: 80px;
+      scrollbar-color: #5555 transparent;
+      scrollbar-width: thin;
+      transition: scrollbar-color .3s ease;
+    }
+
+    .chat-input textarea::placeholder {
+      color: #aaa;
+    }
+
+    @media only screen and (max-width: 926px) {
+      .chat-box:not(.collapsed) {
+        width: 260px;
+        bottom: 200px;
+      }
+
+      .chat-body {
+        height: 220px;
+      }
+    }
+
     .remote-screen {
       position: fixed;
       left: 0;
@@ -714,6 +868,26 @@
     <video autoplay playsinline disablepictureinpicture="true" class="remote-screen"></video>
     <video autoplay playsinline disablepictureinpicture="true" class="remote-mini"></video>
   </div>
+  <div class="chat-box collapsed">
+    <div class="chat-header">
+      <div class="chat-title">
+        <span>Chat</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24">
+          <path
+            fill="currentColor"
+            d="M12 3C6.5 3 2 6.58 2 11a7.22 7.22 0 0 0 2.75 5.5c0 .6-.42 2.17-2.75 4.5c2.37-.11 4.64-1 6.47-2.5c1.14.33 2.34.5 3.53.5c5.5 0 10-3.58 10-8s-4.5-8-10-8m0 14c-4.42 0-8-2.69-8-6s3.58-6 8-6s8 2.69 8 6s-3.58 6-8 6m5-5v-2h-2v2zm-4 0v-2h-2v2zm-4 0v-2H7v2z"
+          />
+        </svg>
+        <span class="chat-unread">0</span>
+      </div>
+    </div>
+    <div class="chat-body">
+      <div class="chat-messages"></div>
+      <div class="chat-input">
+        <textarea rows="1" placeholder="Type a message, Enter to send..."></textarea>
+      </div>
+    </div>
+  </div>
   <div class="waiting-peer"><span class="loading"></span>Waiting for the peer viewer</div>
   <div class="top-warn">
     Peer’s micro is muted
@@ -806,7 +980,7 @@
       </div>
     </div>
   </div>
-  <div class="stats">
+  <div class="stats hide">
     <div class="inbound">
       <div class="in-mic">
         <div>INBOUND MICROPHONE</div>

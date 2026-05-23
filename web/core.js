@@ -49,6 +49,11 @@ const settingsCloseBtn = settingsModal.querySelector('.btn-close-settings')
 const selMic = settingsModal.querySelector('.sel-mic')
 const selSpeaker = settingsModal.querySelector('.sel-speaker')
 const selCam = settingsModal.querySelector('.sel-cam')
+const chatBox = document.querySelector('.chat-box')
+const chatHeader = chatBox.querySelector('.chat-header')
+const chatUnreadEl = chatBox.querySelector('.chat-unread')
+const chatMessagesEl = chatBox.querySelector('.chat-messages')
+const chatInput = chatBox.querySelector('textarea')
 
 /* state */
 let ws;
@@ -90,6 +95,11 @@ let ignoreOffer = false;
 /* stats */
 let statsTimer;
 let prevStats = {};
+
+/* chat */
+let chatChannel = null
+let chatPendingOut = []
+let chatUnread = 0
 
 /* quality */
 let roomWidth = 1920
@@ -1081,6 +1091,13 @@ async function createPeerConnection() {
       }
     };
 
+    pc.ondatachannel = (e) => {
+      if (e.channel.label === 'chat') {
+        chatChannel = e.channel
+        setupChatChannel(chatChannel)
+      }
+    };
+
     pc.onnegotiationneeded = async () => {
       if (makingOffer) {
         console.warn('Event pc.onnegotiationneeded err: already making')
@@ -1122,6 +1139,9 @@ async function createPeerConnection() {
     try {
 
       if (!polite) {
+        chatChannel = pc.createDataChannel('chat', {ordered: true})
+        setupChatChannel(chatChannel)
+
         micTransceiver = pc.addTransceiver('audio', {
           direction: 'sendrecv',
           sendEncodings: [{maxBitrate: 128000}]
@@ -1350,6 +1370,12 @@ function cleanupPeer() {
   camTransceiver = null
   screenTransceiver = null
   screenAudioTransceiver = null
+
+  try {
+    chatChannel?.close()
+  } catch (e) {
+  }
+  chatChannel = null
 
   // clear media elements / remote tracks containers
   try {
@@ -1732,7 +1758,10 @@ selMic.addEventListener('change', async () => {
     newTrack.enabled = !state.micMute
     const sender = micSender || micTransceiver?.sender
     if (sender) await sender.replaceTrack(newTrack)
-    try { micStream?.getTracks().forEach(t => t.stop()) } catch (e) {}
+    try {
+      micStream?.getTracks().forEach(t => t.stop())
+    } catch (e) {
+    }
     micStream = newStream
     log('Mic switched to', id)
   } catch (err) {
@@ -1779,7 +1808,10 @@ selCam.addEventListener('change', async () => {
     newTrack.addEventListener('ended', stopCamShare)
     if (camTransceiver?.sender) await camTransceiver.sender.replaceTrack(newTrack)
     localCamVideo.srcObject = new MediaStream([newTrack])
-    try { camStream?.getTracks().forEach(t => t.stop()) } catch (e) {}
+    try {
+      camStream?.getTracks().forEach(t => t.stop())
+    } catch (e) {
+    }
     camStream = newStream
     log('Camera switched to', id)
   } catch (err) {
@@ -1808,3 +1840,127 @@ function testStun() {
     })
   })(STUN_SERVERS)
 }
+
+/* chat */
+function setupChatChannel(ch) {
+  ch.onopen = () => {
+    log('chat channel open')
+    if (chatPendingOut.length) {
+      for (const m of chatPendingOut) {
+        try {
+          ch.send(m)
+        } catch (e) {
+          console.warn('chat send queued failed', e);
+          break
+        }
+      }
+      chatPendingOut = []
+    }
+  }
+  ch.onclose = () => log('chat channel closed')
+  ch.onerror = (e) => console.warn('chat channel error', e)
+  ch.onmessage = (e) => {
+    if (typeof e.data !== 'string') return
+    appendChatMessage('peer', e.data)
+    if (chatBox.classList.contains('collapsed')) {
+      chatUnread++
+      chatUnreadEl.textContent = chatUnread
+      chatUnreadEl.classList.add('show')
+    }
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]))
+}
+
+function renderMessageHtml(text) {
+  const urlRe = /(https?:\/\/[^\s<>"']+)/g
+  let html = ''
+  let last = 0
+  let m
+  while ((m = urlRe.exec(text)) !== null) {
+    let url = m[0]
+    // strip trailing punctuation
+    let trail = ''
+    while (url.length && '.,;:!?)]}'.includes(url[url.length - 1])) {
+      trail = url[url.length - 1] + trail
+      url = url.slice(0, -1)
+    }
+    html += escapeHtml(text.slice(last, m.index))
+    html += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`
+    html += escapeHtml(trail)
+    last = m.index + m[0].length
+  }
+  html += escapeHtml(text.slice(last))
+  return html.replace(/\n/g, '<br>')
+}
+
+function appendChatMessage(who, text) {
+  const div = document.createElement('div')
+  div.className = 'msg ' + (who === 'me' ? 'me' : who === 'sys' ? 'sys' : 'peer')
+  if (who === 'sys') {
+    div.innerHTML = escapeHtml(text)
+  } else {
+    const label = document.createElement('span')
+    label.className = 'who'
+    label.textContent = who === 'me' ? 'You:' : 'Peer:'
+    const body = document.createElement('span')
+    body.innerHTML = renderMessageHtml(text)
+    div.appendChild(label)
+    div.appendChild(body)
+  }
+  chatMessagesEl.appendChild(div)
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight
+}
+
+function sendChatMessage(text) {
+  text = text.replace(/\s+$/, '')
+  if (!text) return
+  if (text.length > 4000) text = text.slice(0, 4000)
+  appendChatMessage('me', text)
+  if (chatChannel && chatChannel.readyState === 'open') {
+    try {
+      chatChannel.send(text)
+    } catch (e) {
+      console.warn('chat send failed, queue', e)
+      chatPendingOut.push(text)
+    }
+  } else {
+    chatPendingOut.push(text)
+    if (chatPendingOut.length > 100) chatPendingOut = chatPendingOut.slice(-100)
+  }
+}
+
+function openChat() {
+  chatBox.classList.remove('collapsed')
+  chatUnread = 0
+  chatUnreadEl.classList.remove('show')
+}
+
+function closeChat() {
+  chatBox.classList.add('collapsed')
+}
+
+chatHeader.addEventListener('click', (e) => {
+  if (e.target === chatInput) return
+  if (chatBox.classList.contains('collapsed')) openChat()
+  else closeChat()
+})
+
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    const v = chatInput.value
+    chatInput.value = ''
+    chatInput.style.height = ''
+    sendChatMessage(v)
+  }
+})
+
+chatInput.addEventListener('input', () => {
+  chatInput.style.height = '0px'
+  chatInput.style.height = Math.min(80, Math.max(36, chatInput.scrollHeight)) + 'px'
+})

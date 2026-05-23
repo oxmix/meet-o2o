@@ -1,6 +1,6 @@
 # Meet o2o
 
-Screen sharing via Peer‑to‑peer WebRTC with microphone and camera
+Screen sharing via Peer-to-peer WebRTC with microphone, camera, chat, and end-to-end encrypted communication
 
 Demo https://meet.oxmix.net
 
@@ -43,11 +43,25 @@ server {
 
 ## Note
 
-> `STUN` = "зеркало", помогает узнать свой внешний адрес
->
-> `TURN` = "ретранслятор", через него идёт медиа трафик
+### End-to-end
+
+Через WebSocket-сигналинг передаются только публичные части DTLS-handshake — SDP содержит a=fingerprint:sha-256 ... (хэш
+сертификата, не приватный ключ) и ICE-кандидаты (IP/порты).
+
+Приватные ключи DTLS:
+
+- Генерируются браузером локально, никогда не покидают устройство.
+- Сам сеансовый ключ шифрования вырабатывается через DTLS-handshake (ECDHE) уже поверх P2P-соединения, после того как
+  ICE связал пиров напрямую — сигналинг в этом обмене не участвует.
+
+> Что мог бы сделать злонамеренный сигналинг-сервер: подменить a=fingerprint в SDP на свой и устроить MITM (классическая
+> атака на DTLS-SRTP). Именно для защиты от этого в приложении показывается fingerprint-эмодзи (XOR локального и
+> удалённого fingerprint) в левом верхнем углу — если у обоих участников эмодзи совпадают, MITM исключён. Это
+> стандартный SAS (Short Authentication String) подход
 
 ### Case with `STUN` (direct P2P):
+
+> `STUN` = "зеркало", помогает узнать свой внешний адрес
 
 ```
 Client A                      Client B
@@ -63,6 +77,8 @@ Client A                      Client B
 ```
 
 ### Case with `TURN` (when P2P is not possible):
+
+> `TURN` = "ретранслятор", через него идёт медиа трафик
 
 ```
 Client A                      TURN Server                   Client B
