@@ -49,6 +49,9 @@ const settingsCloseBtn = settingsModal.querySelector('.btn-close-settings')
 const selMic = settingsModal.querySelector('.sel-mic')
 const selSpeaker = settingsModal.querySelector('.sel-speaker')
 const selCam = settingsModal.querySelector('.sel-cam')
+const selScreenRes = settingsModal.querySelector('.sel-screen-res')
+const selScreenFps = settingsModal.querySelector('.sel-screen-fps')
+const selScreenCodec = settingsModal.querySelector('.sel-screen-codec')
 const chatBox = document.querySelector('.chat-box')
 const chatHeader = chatBox.querySelector('.chat-header')
 const chatUnreadEl = chatBox.querySelector('.chat-unread')
@@ -512,24 +515,8 @@ shareScreenBtn.onclick = async () => {
     }
     await vidSender.replaceTrack(screenVideoTrack)
 
-    // set fps, bitrate
-    if (vidSender) {
-      try {
-        const params = vidSender.getParameters();
-        if (!params.encodings.length) {
-          params.encodings = [{}];
-        }
-        log('Set for screen maxBitrate:', roomBitrate, 'and maxFramerate:', roomFps)
-        params.encodings[0].maxBitrate = roomBitrate;
-        params.encodings[0].maxFramerate = roomFps;
-        // limiter (1 = native), set 2 => (2K -> ~720p)
-        params.encodings[0].scaleResolutionDownBy = 1;
-        log('Get screen vidSender params:', params);
-        await vidSender.setParameters(params);
-      } catch (err) {
-        log('Set screen vidSender params, err:', err);
-      }
-    }
+    // set fps, bitrate, resolution
+    await applyScreenQuality()
 
     let audSender = screenAudioTransceiver?.sender
     // polite find 3 mid - screen audio
@@ -801,6 +788,15 @@ function connectSignaling() {
 
           // Простая версия: сразу создаём answer если состояние это позволяет
           if (pc.signalingState === 'have-remote-offer') {
+            if (polite) {
+              const remoteCodec = getPreferredVideoCodecFromSdp(msg.offer?.sdp)
+              if (remoteCodec && remoteCodec !== roomCodec) {
+                log(`Polite: adopting codec from offer: ${roomCodec} -> ${remoteCodec}`)
+                roomCodec = remoteCodec
+                localStorage.setItem('q-codec', roomCodec)
+                if (selScreenCodec) selScreenCodec.value = roomCodec
+              }
+            }
             applyVideoCodecPreferences()
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -1215,6 +1211,44 @@ function applyVideoCodecPreferences() {
   }
 }
 
+async function applyScreenQuality() {
+  const track = screenStream?.getVideoTracks()[0]
+  const sender = screenTransceiver?.sender
+  if (!track || !sender) return
+
+  try {
+    await track.applyConstraints({
+      width: {ideal: roomWidth},
+      height: {ideal: roomHeight},
+      frameRate: {ideal: roomFps},
+    })
+  } catch (err) {
+    log('screen track.applyConstraints failed (will fall back to scaleResolutionDownBy):', err)
+  }
+
+  const settings = track.getSettings?.() || {}
+  const actualW = settings.width || roomWidth
+  const actualH = settings.height || roomHeight
+  const scale = Math.max(actualW / roomWidth, actualH / roomHeight, 1)
+
+  try {
+    const params = sender.getParameters()
+    if (!params.encodings?.length) params.encodings = [{}]
+    params.encodings[0].maxBitrate = roomBitrate
+    params.encodings[0].maxFramerate = roomFps
+    params.encodings[0].scaleResolutionDownBy = scale
+    log('applyScreenQuality:', {
+      target: `${roomWidth}x${roomHeight}@${roomFps}`,
+      actual: `${actualW}x${actualH}`,
+      scaleResolutionDownBy: scale,
+      maxBitrate: roomBitrate,
+    })
+    await sender.setParameters(params)
+  } catch (err) {
+    console.warn('applyScreenQuality setParameters err:', err)
+  }
+}
+
 async function setRemoteDescriptionWithDiagnostics(description, kind) {
   try {
     await pc.setRemoteDescription(description)
@@ -1222,6 +1256,21 @@ async function setRemoteDescriptionWithDiagnostics(description, kind) {
     console.warn(`setRemoteDescription(${kind}) failed; SDP diagnostics:`, summarizeSdpCodecs(description?.sdp));
     throw err
   }
+}
+
+function getPreferredVideoCodecFromSdp(sdp) {
+  if (!sdp) return null
+  const eol = sdp.includes('\r\n') ? '\r\n' : '\n'
+  const lines = sdp.split(eol)
+  const mIdx = lines.findIndex(l => l.startsWith('m=video'))
+  if (mIdx === -1) return null
+  const parts = lines[mIdx].split(' ')
+  const firstPt = parts[3]
+  if (!firstPt) return null
+  const rtpmap = lines.find(l => l.startsWith(`a=rtpmap:${firstPt} `))
+  if (!rtpmap) return null
+  const m = rtpmap.match(/^a=rtpmap:\d+\s+([^/]+)\//)
+  return m ? m[1].toUpperCase() : null
 }
 
 function summarizeSdpCodecs(sdp) {
@@ -1678,6 +1727,7 @@ function info() {
 
 /* Settings: live device switching without renegotiation */
 settingsBtn.addEventListener('click', async () => {
+  syncScreenQualitySelects()
   await refreshDeviceSelects()
   settingsModal.classList.add('show')
 })
@@ -1818,6 +1868,42 @@ selCam.addEventListener('change', async () => {
     console.error('Camera switch failed', err)
     showNotify('Failed to switch camera: ' + err.message)
   }
+})
+
+function syncScreenQualitySelects() {
+  selScreenRes.value = `${roomWidth}x${roomHeight}`
+  selScreenFps.value = String(roomFps)
+  selScreenCodec.value = roomCodec
+  selScreenCodec.disabled = polite
+  selScreenCodec.title = polite
+    ? 'Only the room creator can change codec (renegotiation is initiated by them)'
+    : ''
+}
+
+selScreenRes.addEventListener('change', async (e) => {
+  ;[roomWidth, roomHeight] = e.target.value.split('x').map(parseFloat)
+  localStorage.setItem('q-res', e.target.value)
+  calcBitrate()
+  await applyScreenQuality()
+})
+
+selScreenFps.addEventListener('change', async (e) => {
+  roomFps = +e.target.value
+  localStorage.setItem('q-fps', roomFps)
+  calcBitrate()
+  await applyScreenQuality()
+})
+
+selScreenCodec.addEventListener('change', async (e) => {
+  roomCodec = e.target.value
+  localStorage.setItem('q-codec', roomCodec)
+  calcBitrate()
+  if (polite) {
+    showNotify('Codec change has effect only on next connection (you are not the room creator).')
+    return
+  }
+  applyVideoCodecPreferences()
+  await forceRenegotiation()
 })
 
 function testStun() {
